@@ -15,9 +15,12 @@ import bannerUrl from '../../docs/assets/banner.png';
 
 import { fetchWithCache } from './cache';
 import { textSegments } from './chunking';
+import {
+  DEFAULT_ENGINE, EngineId, engineDefinition,
+} from './engine';
 import { normalizeViText } from './textNorm';
 import {
-  Backend, DEFAULT_BACKEND, DEFAULT_GGUF, GGUF_BUILDS, defaultRepo, voicePreviewUrl,
+  Backend, DEFAULT_GGUF, GGUF_BUILDS, defaultRepo, voicePreviewUrl,
 } from './repo';
 import { loadSampleTexts } from './samples';
 import { StreamPlayer, toWavBlob } from './player';
@@ -41,7 +44,7 @@ const els = {
   text: $<HTMLTextAreaElement>('text'),
   voice: $<HTMLSelectElement>('voice'),
   repo: $<HTMLInputElement>('repo'),
-  backend: $<HTMLSelectElement>('backend'),
+  engine: $<HTMLSelectElement>('engine'),
   quant: $<HTMLSelectElement>('quant'),
   quantField: $<HTMLElement>('quant-field'),
   seed: $<HTMLInputElement>('seed'),
@@ -110,14 +113,17 @@ function live(on: boolean): void {
   els.livePill.classList.toggle('on', on);
 }
 
-/** The chosen runtime. The two read different model repositories, so this also
- *  decides what `repo` defaults to. */
+/** The stable engine id is the only runtime choice the rest of the UI needs. */
+function engine(): EngineId {
+  return (els.engine.value as EngineId) || DEFAULT_ENGINE;
+}
+
 function backend(): Backend {
-  return (els.backend.value as Backend) || DEFAULT_BACKEND;
+  return engineDefinition(engine()).backend;
 }
 
 function repo(): string {
-  return els.repo.value || defaultRepo(backend());
+  return els.repo.value || engineDefinition(engine()).defaultRepo;
 }
 
 /** Only one GGUF is ever fetched — whichever this names. The others in the
@@ -134,10 +140,20 @@ for (const build of GGUF_BUILDS) {
   els.quant.append(option);
 }
 
-function updateBackendUi(): void {
-  els.quantField.hidden = backend() !== 'ggml';
+function updateEngineUi(): void {
+  const definition = engineDefinition(engine());
+  const isGgml = definition.backend === 'ggml';
+  els.quantField.hidden = !isGgml;
+  els.cfg.disabled = !definition.capabilities.cfg;
+  if (!definition.capabilities.cfg) els.cfg.value = '1';
 }
-updateBackendUi();
+updateEngineUi();
+
+function disableEngineControls(disabled: boolean): void {
+  els.engine.disabled = disabled;
+  els.quant.disabled = disabled;
+  els.repo.disabled = disabled;
+}
 
 /** Sequence number for the size lookup. Changing backend, quantization or repo
  *  all fire one, each involves a HEAD per file, and they do not come back in
@@ -151,7 +167,7 @@ async function refreshSizeNote(): Promise<void> {
     ? `GGUF ${(gguf() ?? '').replace(/^gguf\/zerotts-|\.gguf$/g, '')}`
     : 'ONNX fp32';
   try {
-    const info = await tts.downloadInfo(repo(), backend(), gguf());
+    const info = await tts.downloadInfo({ engine: engine(), repo: repo(), gguf: gguf() });
     if (mine !== sizeRequest) return;
     els.sizeNote.textContent = info.cached
       ? `Mô hình đã có sẵn trên máy (${mb(info.bytes)}) — tải sẽ rất nhanh.`
@@ -167,14 +183,21 @@ async function refreshSizeNote(): Promise<void> {
 
 els.load.addEventListener('click', async () => {
   els.load.disabled = true;
+  els.generate.disabled = true;
+  disableEngineControls(true);
   try {
     status('Đang tải mô hình…');
     progress(0);
-    const loaded = await tts.load(repo(), (p) => {
+    const loaded = await tts.load({
+      engine: engine(), repo: repo(), gguf: gguf(), fallback: 'cpu',
+    }, (p) => {
       if (p.overallTotal > 0) progress(p.overallLoaded / p.overallTotal);
-      els.sizeNote.textContent =
-        `Đang tải ${p.file.split('/').pop()} — ${mb(p.overallLoaded)} / ${mb(p.overallTotal)}`;
-    }, backend(), gguf());
+      els.sizeNote.textContent = p.overallTotal > 0 && p.overallLoaded >= p.overallTotal
+        ? `Đã tải xong ${mb(p.overallTotal)} — đang khởi tạo engine, `
+          + 'bước này có thể lâu với GGUF f32 hoặc CPU đơn luồng…'
+        : `Đang tải ${p.file.split('/').pop()} — `
+          + `${mb(p.overallLoaded)} / ${mb(p.overallTotal)}`;
+    });
     voices = loaded.voices;
     base = loaded.base;
     sampleRate = loaded.sampleRate;
@@ -194,18 +217,29 @@ els.load.addEventListener('click', async () => {
 
     player = new StreamPlayer(sampleRate);
     progress(null);
+    els.engine.value = loaded.engine;
+    updateEngineUi();
+    const runtime = loaded.engine
+      + (loaded.engine === 'ggml-cpu' && loaded.wasmThreads === false
+        ? ' (đơn luồng do origin HTTP)' : '');
+    const fallback = loaded.fallbackReason
+      ? ` WebGPU không khả dụng (${loaded.fallbackReason}); đã chuyển về CPU.`
+      : '';
     els.sizeNote.textContent =
       `Đã sẵn sàng — ${voices.voices.length} giọng, ${sampleRate / 1000} kHz, `
-      + `bộ máy ${loaded.backend}.`;
-    status(`Ready — ${voices.voices.length} voice(s), ${sampleRate / 1000} kHz.`);
+      + `bộ máy ${runtime}.${fallback}`;
+    status(`Ready — ${voices.voices.length} voice(s), ${sampleRate / 1000} kHz, ${runtime}.`);
     els.voice.disabled = false;
     els.generate.disabled = false;
-    els.load.textContent = '✓  Đã tải mô hình';
+    els.load.disabled = false;
+    els.load.textContent = 'Đổi / tải lại engine';
+    disableEngineControls(false);
   } catch (error) {
     progress(null);
     els.sizeNote.textContent = `Tải mô hình thất bại: ${(error as Error).message}`;
     status(`Load failed: ${(error as Error).message}`);
     els.load.disabled = false;
+    disableEngineControls(false);
   }
 });
 
@@ -215,6 +249,8 @@ els.generate.addEventListener('click', async () => {
   if (!text) { status('Hãy nhập văn bản trước.'); return; }
 
   els.generate.disabled = true;
+  els.load.disabled = true;
+  disableEngineControls(true);
   els.stop.disabled = false;
   els.download.style.display = 'none';
   stopped = false;
@@ -305,6 +341,8 @@ els.generate.addEventListener('click', async () => {
   } finally {
     live(false);
     els.generate.disabled = false;
+    els.load.disabled = false;
+    disableEngineControls(false);
     els.stop.disabled = true;
     cancelRun = null;
   }
@@ -715,18 +753,34 @@ els.speakLive.addEventListener('change', () => {
 });
 
 els.voice.addEventListener('change', updateVoiceUi);
-els.repo.addEventListener('change', refreshSizeNote);
 
-// The two backends read different repositories, so switching one moves the
-// other unless the user has typed their own.
-els.quant.addEventListener('change', refreshSizeNote);
+function markEngineConfigChanged(): void {
+  if (!tts.currentEngine) return;
+  els.generate.disabled = true;
+  els.load.disabled = false;
+  els.load.textContent = 'Tải engine đã chọn';
+  status('Cấu hình engine đã thay đổi — hãy tải engine đã chọn để tiếp tục.');
+}
 
-els.backend.addEventListener('change', () => {
-  updateBackendUi();
+els.repo.addEventListener('change', () => {
+  markEngineConfigChanged();
+  void refreshSizeNote();
+});
+
+// Engines may read different repositories, so switching one moves the other
+// unless the user has typed their own.
+els.quant.addEventListener('change', () => {
+  markEngineConfigChanged();
+  void refreshSizeNote();
+});
+
+els.engine.addEventListener('change', () => {
+  updateEngineUi();
   const current = els.repo.value.trim();
   if (!current || current === defaultRepo('ggml') || current === defaultRepo('onnx')) {
-    els.repo.value = defaultRepo(backend());
+    els.repo.value = engineDefinition(engine()).defaultRepo;
   }
+  markEngineConfigChanged();
   void refreshSizeNote();
 });
 

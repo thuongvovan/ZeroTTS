@@ -3,7 +3,19 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   // onnxruntime-web ships .wasm/.mjs assets that must not be inlined or renamed.
   optimizeDeps: { exclude: ['onnxruntime-web'] },
-  build: { target: 'es2022', assetsInlineLimit: 0 },
+  build: {
+    target: 'es2022',
+    assetsInlineLimit: 0,
+    // Keep the user-facing demo, reproducible benchmark and minimal streaming
+    // example in the deployable bundle. Vite otherwise builds index.html only.
+    rollupOptions: {
+      input: {
+        demo: new URL('./index.html', import.meta.url).pathname,
+        benchmark: new URL('./bench-ggml.html', import.meta.url).pathname,
+        streamingExample: new URL('./examples/streaming.html', import.meta.url).pathname,
+      },
+    },
+  },
   // src/worker.ts is where the model runs; it must be a real module worker so
   // its (large) onnxruntime-web graph stays off the page's bundle.
   worker: { format: 'es' },

@@ -1,44 +1,102 @@
 <!doctype html>
-<html lang="en">
+<html lang="vi">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ZeroTTS backend benchmark</title>
+  <title>ZeroTTS — benchmark trình duyệt</title>
   <style>
-    body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
-    h1 { font-size: 1.2rem; }
-    label { display: block; margin: .4rem 0; }
-    input[type=text] { width: 100%; }
-    button { padding: .4rem .9rem; margin-right: .5rem; }
-    pre { background: #f5f5f5; padding: 1rem; overflow-x: auto; white-space: pre-wrap; }
-    table { border-collapse: collapse; margin-top: 1rem; }
-    th, td { border: 1px solid #ddd; padding: .3rem .6rem; text-align: right; }
-    th:first-child, td:first-child { text-align: left; }
+    :root {
+      color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif;
+      --line: color-mix(in srgb, CanvasText 18%, Canvas); --soft: color-mix(in srgb, CanvasText 6%, Canvas);
+    }
+    body { margin: 2rem auto; padding: 0 1rem 4rem; max-width: 76rem; }
+    h1 { margin-bottom: .25rem; }
+    h2 { font-size: 1.05rem; margin-top: 1.6rem; }
+    .lead { max-width: 75ch; margin-top: 0; opacity: .78; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .8rem; }
+    label { display: block; }
+    label span { display: block; margin-bottom: .25rem; opacity: .75; }
+    input, select, textarea, button { box-sizing: border-box; font: inherit; }
+    input, select, textarea { width: 100%; padding: .6rem; border: 1px solid var(--line); border-radius: .5rem; }
+    textarea { min-height: 7rem; resize: vertical; }
+    button { padding: .65rem 1rem; margin: .6rem .4rem 0 0; border: 1px solid var(--line); border-radius: .5rem; }
+    button.primary { font-weight: 700; }
+    button:disabled { opacity: .5; }
+    details { margin-top: 1rem; }
+    pre { padding: 1rem; overflow: auto; background: var(--soft); border-radius: .6rem; white-space: pre-wrap; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; margin-top: .7rem; }
+    th, td { border: 1px solid var(--line); padding: .45rem .6rem; text-align: right; white-space: nowrap; }
+    th:first-child, td:first-child, td:last-child { text-align: left; }
+    .ok { color: #15803d; } .error { color: #dc2626; }
+    #status { min-height: 1.5rem; font-weight: 600; }
+    code { background: var(--soft); padding: .05rem .3rem; border-radius: .25rem; }
   </style>
 </head>
 <body>
-  <h1>ZeroTTS: onnxruntime-web vs ggml/GGUF</h1>
-  <p>Both backends run the same text, voice, seed and sampling options, so the
-     frame codes are comparable and the wall time is the only variable.
-     Cross-origin isolated: <b id="coi"></b>, hardwareConcurrency: <b id="hc"></b>.</p>
+  <nav><a href="./index.html">Demo đầy đủ</a> ·
+    <a href="./examples/streaming.html">Ví dụ streaming</a> ·
+    <a href="https://github.com/thuongvovan/ZeroTTS/tree/main/js">Hướng dẫn cài</a></nav>
+  <h1>ZeroTTS benchmark trình duyệt</h1>
+  <p class="lead">Mỗi cấu hình được warm-up bằng đúng số frame đã chọn, sau đó
+    chạy lặp với cùng văn bản, giọng và seed. Thời gian tải model không được tính
+    vào tốc độ sinh. Hãy giữ nguyên cấu hình và tải JSON trên từng máy để so sánh.</p>
 
-  <label>Text <input id="text" type="text"
-    value="Xin chào các bạn, hôm nay trời rất đẹp và tôi muốn đi dạo." /></label>
-  <label>Voice <input id="voice" type="text" value="kimoanh" /></label>
-  <label>Threads <input id="threads" type="number" value="4" min="1" max="16" /></label>
-  <label>GGUF <select id="gguf">
-    <option>zerotts-q4_0.gguf</option>
-    <option>zerotts-f16.gguf</option>
-    <option>zerotts-q5_0.gguf</option>
-    <option selected>zerotts-q8_0.gguf</option>
-    <option>zerotts-f32.gguf</option>
-  </select></label>
+  <div class="grid">
+    <label><span>Engine</span><select id="backend">
+      <option value="ggml-cpu" selected>GGML · CPU / WebAssembly</option>
+      <option value="ggml-webgpu">GGML · GPU / WebGPU</option>
+      <option value="onnx-wasm">ONNX Runtime · CPU / WebAssembly</option>
+    </select></label>
+    <label><span>GGUF</span><select id="gguf">
+      <option value="zerotts-q4_0.gguf" selected>q4_0 · 124 MB</option>
+      <option value="zerotts-q8_0.gguf">q8_0 · 206 MB</option>
+      <option value="zerotts-f32.gguf">f32 · 772 MB</option>
+      <option value="zerotts-f16.gguf">f16</option>
+      <option value="zerotts-q5_0.gguf">q5_0</option>
+    </select></label>
+    <label><span>Số luồng CPU</span><input id="threads" type="number" value="4" min="1" max="16" /></label>
+    <label><span>Số frame mỗi lượt</span><input id="frames" type="number" value="80" min="10" max="500" /></label>
+    <label><span>Số lượt đo</span><input id="runs" type="number" value="3" min="1" max="10" /></label>
+    <label><span>Seed</span><input id="seed" type="number" value="1234" min="0" /></label>
+    <label><span>Giọng</span><input id="voice" type="text" value="kimoanh" /></label>
+  </div>
+
+  <label><span>Văn bản</span><textarea id="text">Trong thời đại công nghệ phát triển nhanh chóng, trí tuệ nhân tạo đang dần trở thành một công cụ quen thuộc, hỗ trợ con người học tập, làm việc và sáng tạo hiệu quả hơn mỗi ngày.</textarea></label>
+
+  <details>
+    <summary>Nguồn model và ghi chú</summary>
+    <div class="grid">
+      <label><span>Model base (config, voice, ONNX)</span><input id="model-base" /></label>
+      <label><span>GGUF base</span><input id="gguf-base" /></label>
+    </div>
+    <p>WebGPU được chạy đúng backend, không tự fallback. Nếu không có
+      <code>shader-f16</code>, kết quả sẽ ghi lỗi để không nhầm với CPU. Trình
+      duyệt không cung cấp API đo VRAM chuẩn, vì vậy báo cáo chỉ ghi tốc độ và
+      thông tin adapter.</p>
+  </details>
 
   <p>
-    <button id="run-onnx">Run onnxruntime-web</button>
-    <button id="run-ggml">Run ggml</button>
+    <button class="primary" id="run-selected">Chạy cấu hình đã chọn</button>
+    <button id="run-suite">Chạy GGML CPU + WebGPU</button>
+    <button id="run-all">Chạy cả GGML + ONNX</button>
+    <button id="stop" disabled>Dừng</button>
+    <button id="clear">Xoá kết quả</button>
+    <button id="copy" disabled>Sao chép JSON</button>
+    <button id="download" disabled>Tải JSON</button>
   </p>
-  <div id="results"></div>
+  <p id="status" aria-live="polite">Sẵn sàng.</p>
+
+  <h2>Kết quả</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Engine</th><th>Tải</th><th>Warm-up</th><th>Trung vị</th>
+      <th>Realtime</th><th>Khoảng đo</th><th>Cùng seed</th><th>Trạng thái</th></tr></thead>
+    <tbody id="result-body"><tr><td colspan="8">Chưa có kết quả.</td></tr></tbody>
+  </table></div>
+
+  <h2>Thông tin máy và trình duyệt</h2>
+  <pre id="system">Đang kiểm tra…</pre>
+  <h2>Nhật ký</h2>
   <pre id="log"></pre>
   <script type="module" src="/src/benchGgml.ts"></script>
 </body>

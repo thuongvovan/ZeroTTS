@@ -6,7 +6,8 @@
  */
 
 import { DownloadProgress } from './cache';
-import type { Backend } from './repo';
+import type { EngineId, EngineLoadOptions } from './engine';
+import type { Backend, GgmlDevice } from './repo';
 import { SamplingOptions } from './types';
 import { VoiceIndex } from './types';
 
@@ -38,16 +39,25 @@ export interface LoadedInfo {
    *  nonsense rather than an error. */
   nVoiceQueries: number;
   dModel: number;
-  /** Which runtime loaded, so the page can say so. There is no silent fallback
-   *  between the two: they read different model repositories, and quietly
-   *  switching would turn a 206 MB download into an 858 MB one. */
+  /** Stable public identity. `engine` differs when the requested WebGPU engine
+   * falls back to CPU. */
+  requestedEngine: EngineId;
+  engine: EngineId;
+  /** @deprecated Use `engine` and `engineDefinition(engine).backend`. */
   backend: Backend;
+  /** @deprecated Use `engine`; retained for old applications. */
+  ggmlDevice?: GgmlDevice;
+  fallbackReason?: string;
+  /** Present for GGML: false means the HTTP-safe single-thread artifact. */
+  wasmThreads?: boolean;
+  /** Actual inference thread count. */
+  threads: number;
 }
 
 export type WorkerRequest =
-  | { type: 'downloadInfo'; id: number; repo: string; backend?: Backend; gguf?: string }
+  | { type: 'downloadInfo'; id: number; options: EngineLoadOptions }
   | { type: 'clearCache'; id: number }
-  | { type: 'load'; id: number; repo: string; backend?: Backend; gguf?: string }
+  | { type: 'load'; id: number; options: EngineLoadOptions }
   | { type: 'generate'; id: number; params: GenerateParams }
   /** Cancels the in-flight `generate` whose id is `target`. */
   | { type: 'cancel'; id: number; target: number };

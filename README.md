@@ -141,12 +141,18 @@ settings above.
 
 ## Browser demo
 
-[`js/`](https://github.com/zeroweight-ai/ZeroTTS/blob/main/js) runs the same model client-side with `onnxruntime-web` — no server,
-no upload. See [docs/BROWSER.md](https://github.com/zeroweight-ai/ZeroTTS/blob/main/docs/BROWSER.md).
+[`js/`](js/) runs the same model
+client-side — no server and no upload. Generation uses ggml/GGUF by default;
+the codec remains on `onnxruntime-web`. CPU/WebAssembly is the recommended
+device, with an experimental WebGPU option that automatically falls back to CPU
+when the browser cannot initialize it. The web API uses stable engine ids
+(`ggml-cpu`, `ggml-webgpu`, `onnx-wasm`), while generation and streaming calls
+remain unchanged when switching. See
+[the web installation guide](js/README.md) and [docs/BROWSER.md](docs/BROWSER.md).
 
-Note the download: the weights are **fp32 and not quantized**, so the demo fetches
-~900 MB once and persists it (OPFS/Cache API). That is a deliberate
-quality-over-size choice; it targets desktop broadband, not mobile data.
+The default f32 GGUF plus codec downloads about 820 MB once and is persisted in
+the browser cache. q8_0 (206 MB) and q4_0 (124 MB) GGUFs are available when
+download size matters more than exact parity with the f32 model.
 
 ### Python
 

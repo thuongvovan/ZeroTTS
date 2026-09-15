@@ -11,7 +11,12 @@ import * as ort from 'onnxruntime-web';
 import { fetchWithCache, ProgressFn, totalBytes } from './cache';
 import { CodecMeta, MossCodecDecoder } from './codec';
 import {
-  Backend, DEFAULT_BACKEND, DEFAULT_GGUF, defaultRepo, modelUrls, repoBaseUrl,
+  DEFAULT_ENGINE, engineDefinition, engineFromLegacy,
+} from './engine';
+import type { EngineFallback, EngineId } from './engine';
+import {
+  Backend, DEFAULT_BACKEND, DEFAULT_GGML_DEVICE, DEFAULT_GGUF, GgmlDevice,
+  modelUrls, repoBaseUrl,
 } from './repo';
 import { BpeTokenizer } from './tokenizer';
 import { ZeroTTSBrowser } from './synthesizer';
@@ -20,14 +25,18 @@ import { VoiceIndex, ZeroTTSConfig } from './types';
 
 // Re-exported so the runtime side keeps one import site; the definitions live in
 // repo.ts because the page needs them without the runtime.
-export type { Backend } from './repo';
+export type { Backend, GgmlDevice } from './repo';
+export type { EngineFallback, EngineId, EngineLoadOptions } from './engine';
 export {
-  DEFAULT_BACKEND, DEFAULT_GGUF, DEFAULT_REPO, GGUF_BUILDS, GGUF_REPO, ONNX_REPO,
-  defaultRepo, downloadInfo, loadVoice, modelFiles, modelUrls, repoBaseUrl,
-  voicePreviewUrl,
+  DEFAULT_BACKEND, DEFAULT_ENGINE, DEFAULT_GGML_DEVICE, DEFAULT_GGUF, DEFAULT_REPO,
+  ENGINES, GGUF_BUILDS, GGUF_REPO, ONNX_REPO, defaultRepo,
+  defaultRepoForEngine, downloadInfo, engineDefinition, loadVoice, modelFiles,
+  modelUrls, repoBaseUrl, voicePreviewUrl,
 } from './repo';
 
 export interface LoadOptions {
+  /** Stable engine selector. Prefer this over backend + ggmlDevice. */
+  engine?: EngineId;
   repo?: string;
   revision?: string;
   onProgress?: ProgressFn;
@@ -36,19 +45,42 @@ export interface LoadOptions {
   backend?: Backend;
   /** Which GGUF to fetch, for the ggml backend. */
   gguf?: string;
+  /** CPU is the stable default. WebGPU is experimental and falls back to CPU
+   * when the browser or adapter cannot initialize the ggml backend. */
+  ggmlDevice?: GgmlDevice;
+  /** CPU fallback is the application default for WebGPU. Use `none` when an
+   * exact engine is required. */
+  fallback?: EngineFallback;
 }
 
 export interface LoadedModel {
   tts: ZeroTTSBrowser;
   voices: VoiceIndex;
   base: string;
+  /** Requested and actual engine are separate so fallback is never hidden. */
+  requestedEngine: EngineId;
+  engine: EngineId;
   backend: Backend;
+  /** Actual ggml device after compatibility fallback; absent for ONNX. */
+  ggmlDevice?: GgmlDevice;
+  /** Why a requested WebGPU load continued on CPU instead. */
+  fallbackReason?: string;
+  /** Whether the selected GGML artifact uses pthreads. */
+  wasmThreads?: boolean;
+  /** Actual inference thread count after origin/runtime constraints. */
+  threads: number;
 }
 
 export async function loadModel(options: LoadOptions = {}): Promise<LoadedModel> {
-  const backend = options.backend ?? DEFAULT_BACKEND;
+  const requestedEngine = options.engine
+    ?? engineFromLegacy(options.backend ?? DEFAULT_BACKEND,
+      options.ggmlDevice ?? DEFAULT_GGML_DEVICE);
+  const selected = engineDefinition(requestedEngine ?? DEFAULT_ENGINE);
+  const backend = selected.backend;
+  const requestedGgmlDevice = selected.ggmlDevice ?? DEFAULT_GGML_DEVICE;
+  const fallback = options.fallback ?? 'cpu';
   const gguf = options.gguf ?? DEFAULT_GGUF;
-  const base = repoBaseUrl(options.repo ?? defaultRepo(backend), options.revision);
+  const base = repoBaseUrl(options.repo ?? selected.defaultRepo, options.revision);
 
   // Multi-threaded WASM needs SharedArrayBuffer, which needs the page to be
   // cross-origin isolated (the COOP/COEP headers in vite.config.ts). Asking for
@@ -56,17 +88,16 @@ export async function loadModel(options: LoadOptions = {}): Promise<LoadedModel>
   // because the difference is several times the generation time.
   const isolated = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
   if (!isolated) {
-    console.warn('not cross-origin isolated — running single-threaded WASM (slower); '
-      + 'serve with COOP: same-origin and COEP: require-corp for threads');
+    console.warn('not cross-origin isolated — using the single-thread WASM artifact; '
+      + 'use localhost or HTTPS with COOP/COEP for threaded CPU inference');
   }
   ort.env.wasm.numThreads =
     options.threads ?? (isolated ? Math.min(4, navigator.hardwareConcurrency || 4) : 1);
   ort.env.wasm.simd = true;
 
-  // WASM only. WebGPU's kernels are not bit-identical to the CPU path, and this
-  // model samples INSIDE the graph — small numeric differences change which
-  // token is drawn, so the provider is not a free speed knob but a change in
-  // output quality. It is deliberately not offered.
+  // ONNX stays on WASM. The WebGPU option belongs to the separate ggml
+  // generator; moving these codec/legacy-generator sessions to ONNX WebGPU was
+  // slower in measurements and would make sampling provider-dependent.
   const sessionOptions: ort.InferenceSession.SessionOptions = {
     executionProviders: ['wasm'],
     graphOptimizationLevel: 'all',
@@ -122,10 +153,35 @@ export async function loadModel(options: LoadOptions = {}): Promise<LoadedModel>
     localFrameDecode: ort.InferenceSession;
   } | null = null;
   let frameSource: ZeroTTSGgml | null = null;
+  let ggmlDevice: GgmlDevice | undefined;
+  let fallbackReason: string | undefined;
 
   if (backend === 'ggml') {
-    const { ZeroTTSGgml } = await import('./ggmlBackend');
-    frameSource = await ZeroTTSGgml.create(await get(gguf), tokenizer, options.threads);
+    const { ZeroTTSGgml, assertGgmlWebGpuSupport } = await import('./ggmlBackend');
+    const ggufBuffer = await get(gguf);
+    ggmlDevice = requestedGgmlDevice;
+    if (requestedGgmlDevice === 'webgpu') {
+      try {
+        await assertGgmlWebGpuSupport();
+        frameSource = await ZeroTTSGgml.create(
+          ggufBuffer, tokenizer, options.threads, 'webgpu');
+      } catch (error) {
+        fallbackReason = (error as Error)?.message ?? String(error);
+        if (fallback === 'none') throw error;
+        console.warn(`ggml WebGPU unavailable — falling back to CPU: ${fallbackReason}`);
+        ggmlDevice = 'cpu';
+      }
+    }
+    if (!frameSource) {
+      try {
+        frameSource = await ZeroTTSGgml.create(
+          ggufBuffer, tokenizer, options.threads, 'cpu');
+      } catch (error) {
+        if (!fallbackReason) throw error;
+        const cpuReason = (error as Error)?.message ?? String(error);
+        throw new Error(`WebGPU failed (${fallbackReason}); CPU fallback failed (${cpuReason})`);
+      }
+    }
   } else {
     const [prefixBuf, localBuf, textBuf] = await Promise.all([
       get('onnx/prefix_step.onnx'),
@@ -155,7 +211,13 @@ export async function loadModel(options: LoadOptions = {}): Promise<LoadedModel>
     silenceFrame, frameSource);
 
   await tts.warmup();
-  return { tts, voices, base, backend };
+  const engine = backend === 'onnx'
+    ? 'onnx-wasm' : (ggmlDevice === 'webgpu' ? 'ggml-webgpu' : 'ggml-cpu');
+  return {
+    tts, voices, base, requestedEngine, engine, backend, ggmlDevice,
+    fallbackReason, wasmThreads: frameSource?.wasmThreads,
+    threads: frameSource?.threadCount ?? Number(ort.env.wasm.numThreads ?? 1),
+  };
 }
 
 /**

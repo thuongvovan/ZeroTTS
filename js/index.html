@@ -386,11 +386,17 @@
     <summary>Tuỳ chọn nâng cao</summary>
 
     <div class="field">
-      <label for="backend">Bộ máy suy luận</label>
-      <select id="backend">
-        <option value="ggml" selected>ggml / GGUF — nhẹ hơn, nhanh hơn</option>
-        <option value="onnx">onnxruntime-web — bản gốc, hỗ trợ CFG</option>
+      <label for="engine">Engine</label>
+      <select id="engine">
+        <option value="ggml-cpu" selected>GGML · CPU / WebAssembly — khuyên dùng</option>
+        <option value="ggml-webgpu">GGML · GPU / WebGPU — thử nghiệm</option>
+        <option value="onnx-wasm">ONNX Runtime · CPU / WebAssembly — hỗ trợ CFG</option>
       </select>
+      <div class="note">Mọi engine dùng chung API streaming và codec. WebGPU
+        cần trình duyệt, driver và tính năng
+        <code>shader-f16</code> tương thích. Nếu không khởi tạo được, ứng dụng sẽ
+        tự chuyển về CPU. Tuỳ máy, WebGPU có thể chậm hơn CPU và cùng seed không
+        bảo đảm cho kết quả giống hệt.</div>
     </div>
 
     <div class="field" id="quant-field">
@@ -435,6 +441,9 @@
       <button id="clear-cache">Xoá bộ nhớ đệm mô hình</button>
     </div>
   </details>
+  <p class="tagline"><a href="./examples/streaming.html">Ví dụ code streaming</a>
+    · <a href="./bench-ggml.html">Benchmark trình duyệt và phần cứng</a>
+    · <a href="https://github.com/thuongvovan/ZeroTTS/tree/main/js">Hướng dẫn cài web</a></p>
 </main>
 <script type="module" src="/src/main.ts"></script>
 </body>

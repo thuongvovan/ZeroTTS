@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Build the browser runtime and drop it where Vite can serve it.
+# Build threaded CPU, single-thread CPU and WebGPU browser runtimes, then drop
+# them where Vite serves them.
 #
-# Needs the Emscripten SDK on PATH (source ~/emsdk/emsdk_env.sh). The two
-# artifacts land in js/public/ggml/, which Vite copies to the bundle root
-# verbatim — the .js locates its .wasm and spawns its pthread workers from
-# its own URL, so the pair must stay side by side under that name.
+# Needs the Emscripten SDK on PATH (source ~/emsdk/emsdk_env.sh). Threaded CPU
+# artifacts land in js/public/ggml/, the HTTP-safe single-thread fallback in
+# js/public/ggml-single/, and WebGPU artifacts in js/public/ggml-webgpu/. Vite
+# copies these directories verbatim. Each JS file locates its sibling WASM, so
+# each pair must stay together.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -13,15 +15,23 @@ if ! command -v emcmake >/dev/null; then
     exit 1
 fi
 
-emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=Release .
+emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=Release -DZEROTTS_WASM_THREADS=ON .
 cmake --build build-wasm -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
 
-mkdir -p ../js/public/ggml
+emcmake cmake -B build-wasm-single -DCMAKE_BUILD_TYPE=Release -DZEROTTS_WASM_THREADS=OFF .
+cmake --build build-wasm-single -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
+
+emcmake cmake -B build-webgpu -DCMAKE_BUILD_TYPE=Release -DZEROTTS_WEBGPU=ON -DZEROTTS_WASM_THREADS=ON .
+cmake --build build-webgpu -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
+
+mkdir -p ../js/public/ggml ../js/public/ggml-single ../js/public/ggml-webgpu
 cp build-wasm/zerotts-wasm.js build-wasm/zerotts-wasm.wasm ../js/public/ggml/
+cp build-wasm-single/zerotts-wasm.js build-wasm-single/zerotts-wasm.wasm ../js/public/ggml-single/
+cp build-webgpu/zerotts-wasm.js build-webgpu/zerotts-wasm.wasm ../js/public/ggml-webgpu/
 
 # bench-ggml.html fetches GGUFs from /ggml/models/. A relative symlink keeps the
 # (large, gitignored) weights in cpp/models rather than copying them into the
 # served tree. Vite's dev server follows it; both ends of the link are ignored.
 ln -sfn ../../../cpp/models ../js/public/ggml/models
 
-ls -la ../js/public/ggml/
+ls -la ../js/public/ggml/ ../js/public/ggml-single/ ../js/public/ggml-webgpu/

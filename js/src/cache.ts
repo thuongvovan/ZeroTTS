@@ -203,10 +203,17 @@ async function store(
   cache: Cache | null, url: string, key: string, body: ArrayBuffer,
 ): Promise<void> {
   if (!cache) return;
-  await cache.put(key, new Response(body));
-  // Only after the new copy is safely in: an eviction that ran first would, if
-  // the download failed, leave the user with neither.
-  await evictOtherVersions(cache, url, key);
+  try {
+    await cache.put(key, new Response(body));
+    // Only after the new copy is safely in: an eviction that ran first would,
+    // if the download failed, leave the user with neither.
+    await evictOtherVersions(cache, url, key);
+  } catch (error) {
+    // Cache API quotas and private-mode policies vary by browser. Persistence
+    // is an optimization: never discard successfully downloaded model bytes
+    // merely because this browser refuses to store another large response.
+    console.warn(`ZeroTTS could not cache ${url}; continuing without persistence`, error);
+  }
 }
 
 /**

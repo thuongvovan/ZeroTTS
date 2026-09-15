@@ -1,227 +1,332 @@
-/**
- * Backend A/B for bench-ggml.html.
- *
- * Runs frame generation only — no codec, no audio — because that is where all
- * the time goes and it is the only part the ggml port replaces. Both backends
- * get the same text, voice, seed and sampling options, so the frame codes can
- * be compared alongside the timings: at f32 they must match exactly, and a
- * quantized GGUF is expected to diverge (it samples from slightly different
- * logits), which the report states rather than hides.
- */
+/** UI and report export for the isolated browser benchmark workers. */
+import {
+  BenchConfig, BenchResult, BenchWorkerResponse, backendLabel,
+} from './benchTypes';
 
-import * as ort from 'onnxruntime-web';
+interface WebGpuAdapterLike {
+  readonly features: Iterable<string>;
+  readonly info?: WebGpuInfoLike;
+  readonly limits?: Record<string, unknown>;
+  requestAdapterInfo?: () => Promise<WebGpuInfoLike>;
+}
 
-import { CodecMeta, MossCodecDecoder } from './codec';
-import { ZeroTTSGgml } from './ggmlBackend';
-import { ZeroTTSBrowser } from './synthesizer';
-import { BpeTokenizer } from './tokenizer';
-import { ZeroTTSConfig } from './types';
+interface WebGpuInfoLike {
+  vendor?: string;
+  architecture?: string;
+  device?: string;
+  description?: string;
+  subgroupMinSize?: number;
+  subgroupMaxSize?: number;
+}
+
+interface NavigatorWithHardware extends Navigator {
+  deviceMemory?: number;
+  userAgentData?: { brands?: Array<{ brand: string; version: string }>; mobile?: boolean };
+  gpu?: { requestAdapter(options?: { powerPreference?: string }): Promise<WebGpuAdapterLike | null> };
+}
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const log = (s: string) => { $('log').textContent += s + '\n'; };
+const log = (message: string) => {
+  const now = new Date().toLocaleTimeString('vi-VN', { hour12: false });
+  $('log').textContent += `[${now}] ${message}\n`;
+};
+const trimBase = (value: string) => value.trim().replace(/\/$/, '');
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, Number.isFinite(value) ? Math.floor(value) : min));
 
-$('coi').textContent = String(typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated);
-$('hc').textContent = String(navigator.hardwareConcurrency);
+const params = new URLSearchParams(location.search);
+$<HTMLInputElement>('model-base').value = params.get('model')
+  ?? 'https://huggingface.co/zeroweight-ai/ZeroTTS/resolve/main';
+$<HTMLInputElement>('gguf-base').value = params.get('ggufBase')
+  ?? 'https://huggingface.co/zeroweight-ai/ZeroTTS-GGUF/resolve/main/gguf';
+$('log').textContent = '';
 
-// ?model=<path> points at a different export, for comparing graph revisions.
-const MODEL = new URLSearchParams(location.search).get('model') ?? '/dist/model';
-const SEED = 1234;
-
-const json = <T>(p: string) => fetch(`${MODEL}/${p}`).then((r) => r.json() as Promise<T>);
-const bin = (p: string) => fetch(`${MODEL}/${p}`).then((r) => r.arrayBuffer());
-
-/** Little-endian .npy reader — only the two small side files need it. */
-function npy(buf: ArrayBuffer, kind: 'f4' | 'i8') {
-  const u8 = new Uint8Array(buf);
-  const dv = new DataView(buf);
-  const major = u8[6];
-  const headerLen = major >= 2 ? dv.getUint32(8, true) : dv.getUint16(8, true);
-  const off = (major >= 2 ? 12 : 10) + headerLen;
-  return kind === 'f4' ? new Float32Array(buf, off) : new BigInt64Array(buf, off);
-}
-
-interface Result {
-  backend: string;
-  frames: number[][];
-  wallMs: number;
-  detail: string;
-}
-
-const results: Result[] = [];
-
-function report() {
-  const audioS = (r: Result) => r.frames.length / 12.5;
-  const rows = results.map((r) => `
-    <tr><td>${r.backend}</td><td>${r.frames.length}</td>
-        <td>${audioS(r).toFixed(2)} s</td>
-        <td>${(r.wallMs / 1000).toFixed(2)} s</td>
-        <td>${(r.wallMs / 1000 / audioS(r)).toFixed(3)}</td>
-        <td><b>${(audioS(r) / (r.wallMs / 1000)).toFixed(2)}x</b></td>
-        <td>${r.detail}</td></tr>`).join('');
-  $('results').innerHTML = `<table>
-    <tr><th>backend</th><th>frames</th><th>audio</th><th>wall</th><th>RTF</th>
-        <th>realtime</th><th>per-stage</th></tr>${rows}</table>`;
-
-  // Same seed and same draw order, so identical codes are the expected result
-  // whenever both sides are running f32.
-  if (results.length >= 2) {
-    const [a, b] = [results[results.length - 2], results[results.length - 1]];
-    const n = Math.min(a.frames.length, b.frames.length);
-    let diff = 0;
-    for (let i = 0; i < n; i++) {
-      for (let k = 0; k < a.frames[i].length; k++) if (a.frames[i][k] !== b.frames[i][k]) diff++;
-    }
-    log(`${a.backend} vs ${b.backend}: ${diff} differing codes over ${n} shared frames`
-      + (a.frames.length === b.frames.length ? '' : ` (frame counts differ: ${a.frames.length} vs ${b.frames.length})`));
-  }
-}
-
-// Only ONE backend is held at a time. Each is ~0.2-0.9 GB of buffers plus a
-// WASM heap, and keeping two (or two GGUFs) alive pushes the renderer into
-// swapping — which does not fail, it just makes every subsequent measurement
-// 10-20x slower and looks exactly like a real regression. Releasing first is
-// what keeps successive runs on this page comparable.
-let ortTts: ZeroTTSBrowser | null = null;
-let ortSessions: ort.InferenceSession[] = [];
-let ggml: { key: string; tts: ZeroTTSGgml } | null = null;
-
-async function releaseAll(): Promise<void> {
-  for (const s of ortSessions) {
-    await s.release().catch(() => {});
-  }
-  ortSessions = [];
-  ortTts = null;
-  ggml?.tts.free();
-  ggml = null;
-}
-
-async function loadOnnx(threads: number): Promise<ZeroTTSBrowser> {
-  if (ortTts) return ortTts;
-  await releaseAll();
-  ort.env.wasm.numThreads = threads;
-  ort.env.wasm.simd = true;
-  const opts: ort.InferenceSession.SessionOptions = {
-    executionProviders: ['wasm'], graphOptimizationLevel: 'all',
+async function inspectSystem() {
+  const nav = navigator as NavigatorWithHardware;
+  const report: Record<string, unknown> = {
+    capturedAt: new Date().toISOString(),
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    languages: navigator.languages,
+    userAgentData: nav.userAgentData ?? null,
+    hardwareConcurrency: navigator.hardwareConcurrency ?? null,
+    deviceMemoryGiB: nav.deviceMemory ?? null,
+    crossOriginIsolated: self.crossOriginIsolated,
+    screen: `${screen.width}x${screen.height} @ ${devicePixelRatio}x`,
+    webgpu: { available: false },
   };
-  log('loading ONNX graphs …');
-  const [textEncoder, prefixStep, localFrameDecode] = await Promise.all([
-    bin('onnx/text_encoder.onnx').then((b) => ort.InferenceSession.create(b, opts)),
-    bin('onnx/prefix_step.onnx').then((b) => ort.InferenceSession.create(b, opts)),
-    bin('onnx/local_frame_decode.onnx').then((b) => ort.InferenceSession.create(b, opts)),
+  try {
+    const adapter = await nav.gpu?.requestAdapter({ powerPreference: 'high-performance' });
+    if (adapter) {
+      const rawInfo = adapter.info ?? await adapter.requestAdapterInfo?.() ?? {};
+      // GPUAdapterInfo/GPUSupportedLimits expose properties on their prototype,
+      // so JSON.stringify(rawInfo) is often just `{}`. Copy known fields.
+      const info = Object.fromEntries([
+        'vendor', 'architecture', 'device', 'description',
+        'subgroupMinSize', 'subgroupMaxSize',
+      ].flatMap((key) => {
+        const value = rawInfo[key as keyof WebGpuInfoLike];
+        return value === undefined || value === '' ? [] : [[key, value]];
+      }));
+      const limits = Object.fromEntries([
+        'maxBufferSize', 'maxStorageBufferBindingSize',
+        'maxComputeWorkgroupStorageSize', 'maxComputeInvocationsPerWorkgroup',
+        'maxComputeWorkgroupSizeX', 'maxComputeWorkgroupSizeY',
+        'maxComputeWorkgroupSizeZ', 'maxComputeWorkgroupsPerDimension',
+      ].flatMap((key) => {
+        const value = adapter.limits?.[key];
+        return value === undefined ? [] : [[key, value]];
+      }));
+      report.webgpu = {
+        available: true,
+        info,
+        limits,
+        shaderF16: Array.from(adapter.features).includes('shader-f16'),
+        features: Array.from(adapter.features).sort(),
+      };
+    }
+  } catch (error) {
+    report.webgpu = { available: false, error: (error as Error).message };
+  }
+  return report;
+}
+
+const systemPromise = inspectSystem();
+systemPromise.then((system) => { $('system').textContent = JSON.stringify(system, null, 2); });
+
+function readConfig(): BenchConfig {
+  return {
+    backend: $<HTMLSelectElement>('backend').value as BenchConfig['backend'],
+    gguf: $<HTMLSelectElement>('gguf').value,
+    threads: clamp(Number($<HTMLInputElement>('threads').value), 1, 16),
+    frames: clamp(Number($<HTMLInputElement>('frames').value), 10, 500),
+    runs: clamp(Number($<HTMLInputElement>('runs').value), 1, 10),
+    seed: clamp(Number($<HTMLInputElement>('seed').value), 0, 0x7fffffff),
+    voice: $<HTMLInputElement>('voice').value.trim(),
+    text: $<HTMLTextAreaElement>('text').value.trim(),
+    modelBase: trimBase($<HTMLInputElement>('model-base').value),
+    ggufBase: trimBase($<HTMLInputElement>('gguf-base').value),
+  };
+}
+
+function validate(config: BenchConfig): void {
+  if (!config.text) throw new Error('Văn bản không được để trống');
+  if (!config.voice) throw new Error('Tên giọng không được để trống');
+  if (!config.modelBase) throw new Error('Model base không được để trống');
+  if (!config.ggufBase && config.backend !== 'onnx-wasm') {
+    throw new Error('GGUF base không được để trống');
+  }
+}
+
+let cancelActive: (() => void) | null = null;
+let stopRequested = false;
+let running = false;
+
+function runIsolated(config: BenchConfig): Promise<BenchResult> {
+  try {
+    validate(config);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  return new Promise((resolve) => {
+    const worker = new Worker(new URL('./benchWorker.ts', import.meta.url), {
+      type: 'module', name: 'zerotts-benchmark',
+    });
+    let settled = false;
+    let cancelThis: () => void;
+    const finish = (result: BenchResult) => {
+      if (settled) return;
+      settled = true;
+      if (cancelActive === cancelThis) cancelActive = null;
+      worker.terminate();
+      resolve(result);
+    };
+    cancelThis = () => finish({
+      backend: config.backend,
+      label: backendLabel(config),
+      config,
+      status: 'error',
+      error: 'Đã dừng theo yêu cầu',
+    });
+    cancelActive = cancelThis;
+    worker.onmessage = (event: MessageEvent<BenchWorkerResponse>) => {
+      if (event.data.type === 'log') log(event.data.message);
+      else finish(event.data.result);
+    };
+    worker.onerror = (event) => finish({
+      backend: config.backend,
+      label: backendLabel(config),
+      config,
+      status: 'error',
+      error: event.message || 'Benchmark worker bị dừng',
+    });
+    worker.postMessage({ type: 'run', config });
+  });
+}
+
+const results: BenchResult[] = [];
+
+function renderResults(): void {
+  const body = $<HTMLTableSectionElement>('result-body');
+  body.replaceChildren();
+  if (!results.length) {
+    const row = body.insertRow();
+    const cell = row.insertCell();
+    cell.colSpan = 8;
+    cell.textContent = 'Chưa có kết quả.';
+    return;
+  }
+  for (const result of results) {
+    const row = body.insertRow();
+    const add = (value: string) => { row.insertCell().textContent = value; };
+    add(result.label);
+    if (result.status === 'error') {
+      for (let i = 0; i < 6; i++) add('—');
+      const statusCell = row.insertCell();
+      statusCell.textContent = result.error ?? 'Lỗi';
+      statusCell.className = 'error';
+      continue;
+    }
+    const times = result.measurements?.map((run) => run.wallMs) ?? [];
+    add(`${(result.loadMs! / 1000).toFixed(2)} s`);
+    add(`${(result.warmupMs! / 1000).toFixed(2)} s`);
+    add(`${(result.medianMs! / 1000).toFixed(2)} s`);
+    add(`${result.medianRealtime!.toFixed(2)}x`);
+    add(`${(Math.min(...times) / 1000).toFixed(2)}–${(Math.max(...times) / 1000).toFixed(2)} s`);
+    add(result.reproducible ? 'Có' : `Không · lệch ${result.driftFromFirst?.join('/')}`);
+    const statusCell = row.insertCell();
+    statusCell.textContent = 'Đạt';
+    statusCell.className = 'ok';
+  }
+}
+
+async function makeReport() {
+  return {
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    system: await systemPromise,
+    results,
+  };
+}
+
+async function runCases(configs: BenchConfig[]): Promise<BenchResult[]> {
+  if (running) throw new Error('Một benchmark khác đang chạy');
+  running = true;
+  stopRequested = false;
+  const buttons = Array.from(document.querySelectorAll('button')) as HTMLButtonElement[];
+  buttons.forEach((button) => { button.disabled = true; });
+  $<HTMLButtonElement>('stop').disabled = false;
+  const startedAt = results.length;
+  try {
+    for (const config of configs) {
+      $('status').textContent = `Đang chạy ${backendLabel(config)}…`;
+      const result = await runIsolated(config).catch((error) => ({
+        backend: config.backend,
+        label: backendLabel(config),
+        config,
+        status: 'error' as const,
+        error: (error as Error)?.message ?? String(error),
+      }));
+      if (result.status === 'error') log(`${result.label}: LỖI · ${result.error}`);
+      results.push(result);
+      renderResults();
+      if (stopRequested) break;
+    }
+    const completed = results.length - startedAt;
+    $('status').textContent = stopRequested
+      ? `Đã dừng sau ${completed} cấu hình.`
+      : `Hoàn tất ${completed} cấu hình.`;
+    return results.slice(startedAt);
+  } finally {
+    running = false;
+    cancelActive = null;
+    $<HTMLButtonElement>('run-selected').disabled = false;
+    $<HTMLButtonElement>('run-suite').disabled = false;
+    $<HTMLButtonElement>('run-all').disabled = false;
+    $<HTMLButtonElement>('stop').disabled = true;
+    $<HTMLButtonElement>('clear').disabled = false;
+    const hasResults = results.length > 0;
+    $<HTMLButtonElement>('copy').disabled = !hasResults;
+    $<HTMLButtonElement>('download').disabled = !hasResults;
+  }
+}
+
+$('run-selected').addEventListener('click', () => { void runCases([readConfig()]); });
+$('run-suite').addEventListener('click', () => {
+  const base = readConfig();
+  void runCases([
+    { ...base, backend: 'ggml-cpu' },
+    { ...base, backend: 'ggml-webgpu' },
   ]);
-  const codec = await MossCodecDecoder.create(
-    await json<CodecMeta>('onnx/codec/codec_browser_onnx_meta.json'),
-    {
-      decodeFull: await bin('onnx/codec/moss_audio_tokenizer_decode_full.onnx'),
-      decodeStep: await bin('onnx/codec/moss_audio_tokenizer_decode_step.onnx'),
-    },
-    {
-      ...opts,
-      externalData: [{
-        path: 'moss_audio_tokenizer_decode_shared.data',
-        data: await bin('onnx/codec/moss_audio_tokenizer_decode_shared.data'),
-      }],
-    },
-  );
-  ortSessions = [textEncoder, prefixStep, localFrameDecode];
-  ortTts = new ZeroTTSBrowser(
-    { textEncoder, prefixStep, localFrameDecode }, codec,
-    await BpeTokenizer.create(await json('tokenizer.json')),
-    await json<ZeroTTSConfig>('config.json'),
-    npy(await bin('null_voice_emb.npy'), 'f4') as Float32Array,
-    npy(await bin('silence_frame.npy'), 'i8') as BigInt64Array,
-  );
-  return ortTts;
-}
+});
+$('run-all').addEventListener('click', () => {
+  const base = readConfig();
+  void runCases([
+    { ...base, backend: 'ggml-cpu' },
+    { ...base, backend: 'ggml-webgpu' },
+    { ...base, backend: 'onnx-wasm' },
+  ]);
+});
+$('stop').addEventListener('click', () => {
+  stopRequested = true;
+  cancelActive?.();
+  $<HTMLButtonElement>('stop').disabled = true;
+  $('status').textContent = 'Đang dừng benchmark…';
+});
+$('clear').addEventListener('click', () => {
+  results.splice(0);
+  $('log').textContent = '';
+  $('status').textContent = 'Đã xoá kết quả.';
+  $<HTMLButtonElement>('copy').disabled = true;
+  $<HTMLButtonElement>('download').disabled = true;
+  renderResults();
+});
+$('copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(await makeReport(), null, 2));
+    $('status').textContent = 'Đã sao chép JSON.';
+  } catch (error) {
+    $('status').textContent = `Không thể sao chép: ${(error as Error).message}`;
+  }
+});
+$('download').addEventListener('click', async () => {
+  const blob = new Blob([JSON.stringify(await makeReport(), null, 2)], { type: 'application/json' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `zerotts-browser-benchmark-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 0);
+});
 
-async function loadGgml(file: string, threads: number): Promise<ZeroTTSGgml> {
-  const key = `${file}:${threads}`;
-  if (ggml?.key === key) return ggml.tts;
-  await releaseAll();
-  log(`loading ${file} …`);
-  const t0 = performance.now();
-  const gguf = await fetch(`/ggml/models/${file}`).then((r) => r.arrayBuffer());
-  const tts = await ZeroTTSGgml.create(
-    gguf, await BpeTokenizer.create(await json('tokenizer.json')), threads);
-  log(`  ${(gguf.byteLength / 1e6).toFixed(0)} MB, ready in ${(performance.now() - t0).toFixed(0)} ms`);
-  ggml = { key, tts };
-  return tts;
-}
-
-async function runOnnx(threads: number, text: string, voiceName: string) {
-  {
-    const tts = await loadOnnx(threads);
-    const voice = new Float32Array(await bin(`voices/${voiceName}/voice.bin`));
-    log(`running onnxruntime-web (${threads} threads) …`);
-    const frames: number[][] = [];
-    const t0 = performance.now();
-    for await (const f of tts.generateFrames(text, voice, {}, SEED)) {
-      frames.push(Array.from(f, Number));
-    }
-    results.push({
-      backend: `onnxruntime-web (${threads}t)`, frames,
-      wallMs: performance.now() - t0, detail: '—',
-    });
-    report();
+declare global {
+  interface Window {
+    zbench: {
+      run(overrides?: Partial<BenchConfig>): Promise<BenchResult[]>;
+      suite(overrides?: Partial<BenchConfig>): Promise<BenchResult[]>;
+      all(overrides?: Partial<BenchConfig>): Promise<BenchResult[]>;
+      report(): ReturnType<typeof makeReport>;
+      results: BenchResult[];
+    };
   }
 }
 
-async function runGgml(file: string, threads: number, text: string, voiceName: string) {
-  {
-    const tts = await loadGgml(file, threads);
-    const voice = new Float32Array(await bin(`voices/${voiceName}/voice.bin`));
-    log(`running ggml ${file} (${threads} threads) …`);
-    tts.resetTimings();
-    const frames: number[][] = [];
-    const t0 = performance.now();
-    for await (const f of tts.generateFrames(text, voice, {}, SEED)) {
-      frames.push(Array.from(f));
-    }
-    const wallMs = performance.now() - t0;
-    const tm = tts.timings();
-    results.push({
-      backend: `ggml ${file.replace(/^zerotts-|\.gguf$/g, '')} (${threads}t)`, frames, wallMs,
-      detail: `begin ${tm.beginMs.toFixed(0)} ms · frame ${(tm.frameMs / tm.frames).toFixed(2)} ms · `
-            + `advance ${(tm.advanceMs / tm.frames).toFixed(2)} ms`,
-    });
-    report();
-  }
-}
-
-const inputs = () => ({
-  threads: Number(($('threads') as HTMLInputElement).value),
-  text: ($('text') as HTMLInputElement).value,
-  voice: ($('voice') as HTMLInputElement).value,
-  gguf: ($('gguf') as HTMLSelectElement).value,
-});
-
-$('run-onnx').addEventListener('click', async () => {
-  const i = inputs();
-  try { await runOnnx(i.threads, i.text, i.voice); }
-  catch (e) { log(`onnx error: ${(e as Error).message}`); }
-});
-
-$('run-ggml').addEventListener('click', async () => {
-  const i = inputs();
-  try { await runGgml(i.gguf, i.threads, i.text, i.voice); }
-  catch (e) { log(`ggml error: ${(e as Error).message}`); }
-});
-
-/**
- * Scripted entry point, so a sweep can be driven from the console or a test
- * runner instead of by clicking. onnxruntime-web's thread count is a global set
- * before the first session is created, so a sweep over thread counts has to
- * reload the page between ONNX runs — hence one thread count per page load.
- */
-declare global { interface Window { zbench: unknown } }
 window.zbench = {
-  onnx: runOnnx,
-  ggml: runGgml,
+  run: (overrides = {}) => runCases([{ ...readConfig(), ...overrides }]),
+  suite: (overrides = {}) => {
+    const config = { ...readConfig(), ...overrides };
+    return runCases([
+      { ...config, backend: 'ggml-cpu' },
+      { ...config, backend: 'ggml-webgpu' },
+    ]);
+  },
+  all: (overrides = {}) => {
+    const config = { ...readConfig(), ...overrides };
+    return runCases([
+      { ...config, backend: 'ggml-cpu' },
+      { ...config, backend: 'ggml-webgpu' },
+      { ...config, backend: 'onnx-wasm' },
+    ]);
+  },
+  report: makeReport,
   results,
-  table: () => results.map((r) => ({
-    backend: r.backend,
-    frames: r.frames.length,
-    realtime: +(r.frames.length / 12.5 / (r.wallMs / 1000)).toFixed(2),
-    detail: r.detail,
-  })),
 };

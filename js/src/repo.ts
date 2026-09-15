@@ -8,6 +8,12 @@
  */
 
 import { fetchWithCache, isCached, totalBytes } from './cache';
+import {
+  Backend, DEFAULT_ENGINE, ENGINES, EngineId, GgmlDevice, engineDefinition,
+} from './engine';
+
+export type { Backend, EngineId, GgmlDevice } from './engine';
+export { DEFAULT_ENGINE, ENGINES, engineDefinition } from './engine';
 
 /**
  * Which runtime generates frames.
@@ -18,14 +24,13 @@ import { fetchWithCache, isCached, totalBytes } from './cache';
  * it is the one with a Python reference implementation behind it, and because
  * it is the only one that implements CFG.
  */
-export type Backend = 'ggml' | 'onnx';
-
 export const DEFAULT_BACKEND: Backend = 'ggml';
+export const DEFAULT_GGML_DEVICE: GgmlDevice = 'cpu';
 
 /** GGUF weights for the ggml backend. */
-export const GGUF_REPO = 'zeroweight-ai/ZeroTTS-GGUF';
+export const GGUF_REPO = ENGINES['ggml-cpu'].defaultRepo;
 /** ONNX graphs for the onnxruntime backend. */
-export const ONNX_REPO = 'zeroweight-ai/ZeroTTS';
+export const ONNX_REPO = ENGINES['onnx-wasm'].defaultRepo;
 
 /**
  * Which GGUF to fetch. f32 by default, for two reasons that both cut against
@@ -56,6 +61,10 @@ export const GGUF_BUILDS = [
 
 export function defaultRepo(backend: Backend): string {
   return backend === 'ggml' ? GGUF_REPO : ONNX_REPO;
+}
+
+export function defaultRepoForEngine(engine: EngineId = DEFAULT_ENGINE): string {
+  return engineDefinition(engine).defaultRepo;
 }
 
 /** @deprecated prefer defaultRepo(backend); kept so callers that predate the

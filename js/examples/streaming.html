@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ZeroTTS — ví dụ streaming tối giản</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+    body { margin: 2rem auto; padding: 0 1rem; max-width: 48rem; }
+    label { display: block; margin: .8rem 0 .25rem; }
+    textarea, select { box-sizing: border-box; width: 100%; padding: .65rem; font: inherit; }
+    textarea { min-height: 9rem; }
+    button { margin: 1rem .4rem 0 0; padding: .65rem 1rem; font: inherit; }
+    #status { padding: .8rem; background: color-mix(in srgb, CanvasText 7%, Canvas); }
+    code { background: color-mix(in srgb, CanvasText 8%, Canvas); padding: .1rem .3rem; }
+  </style>
+</head>
+<body>
+  <h1>Ví dụ ZeroTTS streaming</h1>
+  <p>Ví dụ nhỏ dùng GGML để tạo từng frame trong Web Worker, giải mã từng khối
+    PCM rồi phát ngay bằng Web Audio. Model q4 được chọn để lần tải đầu ngắn hơn.</p>
+
+  <label for="engine">Engine</label>
+  <select id="engine">
+    <option value="ggml-cpu" selected>GGML · CPU / WebAssembly</option>
+    <option value="ggml-webgpu">GGML · GPU / WebGPU (thử nghiệm)</option>
+    <option value="onnx-wasm">ONNX Runtime · CPU / WebAssembly</option>
+  </select>
+
+  <label for="text">Văn bản</label>
+  <textarea id="text">Xin chào. Đây là ví dụ phát âm thanh ngay trong lúc ZeroTTS vẫn đang tạo phần tiếp theo của câu.</textarea>
+
+  <button id="load">1. Tải model</button>
+  <button id="speak" disabled>2. Phát streaming</button>
+  <button id="stop" disabled>Dừng</button>
+  <p id="status">Chưa tải model.</p>
+
+  <p><a href="../index.html">Demo đầy đủ</a> ·
+    <a href="../bench-ggml.html">Benchmark nhiều máy/trình duyệt</a></p>
+  <script type="module" src="./streaming.ts"></script>
+</body>
+</html>

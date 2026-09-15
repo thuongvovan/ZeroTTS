@@ -18,11 +18,17 @@ js/dist/
 # cpp/vendor-ggml is a submodule, not ignored. `models/` and `build/` above
 # already cover cpp/models and cpp/build.
 cpp/build-wasm/
+cpp/build-wasm-single/
+cpp/build-webgpu/
 # emcmake's compiler probe
 cpp/a.out.*
 js/public/ggml/*.js
 js/public/ggml/*.wasm
 js/public/ggml/models
+js/public/ggml-single/*.js
+js/public/ggml-single/*.wasm
+js/public/ggml-webgpu/*.js
+js/public/ggml-webgpu/*.wasm
 .DS_Store
 
 # internal planning docs must never land in the public repo

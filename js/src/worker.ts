@@ -14,9 +14,10 @@
  */
 
 import { clearCache } from './cache';
+import { DEFAULT_ENGINE, engineDefinition } from './engine';
 import { loadModel } from './loader';
 import {
-  Backend, DEFAULT_BACKEND, defaultRepo, downloadInfo, loadVoice, repoBaseUrl,
+  downloadInfo, loadVoice, repoBaseUrl,
 } from './repo';
 import { ZeroTTSBrowser } from './synthesizer';
 import { GenerateParams, LoadedInfo, WorkerRequest, WorkerResponse } from './workerProtocol';
@@ -101,11 +102,13 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   try {
     switch (message.type) {
       case 'downloadInfo': {
-        const backend = message.backend ?? DEFAULT_BACKEND;
+        const selected = engineDefinition(message.options.engine ?? DEFAULT_ENGINE);
         post({
           type: 'result', id,
           value: await downloadInfo(
-            repoBaseUrl(message.repo || defaultRepo(backend)), backend, message.gguf),
+            repoBaseUrl(message.options.repo || selected.defaultRepo,
+              message.options.revision),
+            selected.backend, message.options.gguf),
         });
         break;
       }
@@ -115,11 +118,8 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         break;
       }
       case 'load': {
-        const backend = message.backend ?? DEFAULT_BACKEND;
         const loaded = await loadModel({
-          backend,
-          gguf: message.gguf,
-          repo: message.repo || defaultRepo(backend),
+          ...message.options,
           onProgress: (progress) => post({ type: 'progress', id, progress }),
         });
         tts = loaded.tts;
@@ -127,7 +127,11 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         voices.clear();
         const info: LoadedInfo = {
           voices: loaded.voices, base: loaded.base,
-          sampleRate: loaded.tts.sampleRate, backend: loaded.backend,
+          sampleRate: loaded.tts.sampleRate,
+          requestedEngine: loaded.requestedEngine, engine: loaded.engine,
+          backend: loaded.backend,
+          ggmlDevice: loaded.ggmlDevice, fallbackReason: loaded.fallbackReason,
+          wasmThreads: loaded.wasmThreads, threads: loaded.threads,
           nVoiceQueries: loaded.tts.nVoiceQueries, dModel: loaded.tts.dModel,
         };
         post({ type: 'result', id, value: info });

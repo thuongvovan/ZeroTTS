@@ -3,12 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Browser demo for ZeroTTS \u2014 runs the model client-side with onnxruntime-web.",
+  "description": "Browser demo for ZeroTTS \u2014 ggml/GGUF generation with an ONNX codec.",
   "scripts": {
     "dev": "vite",
+    "example": "vite --host 0.0.0.0 --open /examples/streaming.html",
+    "benchmark": "vite --host 0.0.0.0 --open /bench-ggml.html",
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test:engine": "node --loader ./test/ts-loader.mjs test/engine.mjs",
     "parity": "node --loader ./test/ts-loader.mjs test/parity.mjs",
     "parity:ggml": "node --loader ./test/ts-loader.mjs test/ggml-parity.mjs dist/model ../cpp/models/zerotts-f32.gguf"
   },
