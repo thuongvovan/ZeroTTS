@@ -125,17 +125,16 @@ export class ZeroTTSGgml {
   static async create(
     gguf: ArrayBuffer, tokenizer: BpeTokenizer, assets: RuntimeAssets, threads?: number,
   ): Promise<ZeroTTSGgml> {
-    // Imported through a constructed function so the Emscripten module remains
-    // a separately emitted package asset. Its WASM URL is passed explicitly
-    // because bundlers are free to hash the two files differently.
-    const dynamicImport = new Function('u', 'return import(u)') as
-      (u: string) => Promise<{
-        default: (options?: {
-          locateFile?: (path: string, prefix: string) => string;
-        }) => Promise<ZeroTTSWasm>;
-      }>;
+    // The module URL is resolved on the main thread and sent into this Worker.
+    // `vite-ignore` preserves that runtime URL without resorting to eval/new
+    // Function, which Manifest V3 extension pages forbid through their CSP.
     const runtime = wasmRuntime(assets);
-    const factory = (await dynamicImport(runtime.moduleUrl)).default;
+    const runtimeModule = await import(/* @vite-ignore */ runtime.moduleUrl) as {
+      default: (options?: {
+        locateFile?: (path: string, prefix: string) => string;
+      }) => Promise<ZeroTTSWasm>;
+    };
+    const factory = runtimeModule.default;
     const M: ZeroTTSWasm = await factory({
       locateFile: (path) => path.endsWith('.wasm') ? runtime.wasmUrl : path,
     });
