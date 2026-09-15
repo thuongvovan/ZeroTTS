@@ -45,7 +45,6 @@
   <div class="grid">
     <label><span>Engine</span><select id="backend">
       <option value="ggml-cpu" selected>GGML · CPU / WebAssembly</option>
-      <option value="ggml-webgpu">GGML · GPU / WebGPU</option>
       <option value="onnx-wasm">ONNX Runtime · CPU / WebAssembly</option>
     </select></label>
     <label><span>GGUF</span><select id="gguf">
@@ -70,15 +69,12 @@
       <label><span>Model base (config, voice, ONNX)</span><input id="model-base" /></label>
       <label><span>GGUF base</span><input id="gguf-base" /></label>
     </div>
-    <p>WebGPU được chạy đúng backend, không tự fallback. Nếu không có
-      <code>shader-f16</code>, kết quả sẽ ghi lỗi để không nhầm với CPU. Trình
-      duyệt không cung cấp API đo VRAM chuẩn, vì vậy báo cáo chỉ ghi tốc độ và
-      thông tin adapter.</p>
+    <p>Mỗi engine chạy trong một Worker mới để model và heap WASM của
+      lượt trước không làm sai kết quả sau.</p>
   </details>
 
   <p>
     <button class="primary" id="run-selected">Chạy cấu hình đã chọn</button>
-    <button id="run-suite">Chạy GGML CPU + WebGPU</button>
     <button id="run-all">Chạy cả GGML + ONNX</button>
     <button id="stop" disabled>Dừng</button>
     <button id="clear">Xoá kết quả</button>

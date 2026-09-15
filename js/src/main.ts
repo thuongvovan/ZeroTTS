@@ -189,7 +189,7 @@ els.load.addEventListener('click', async () => {
     status('Đang tải mô hình…');
     progress(0);
     const loaded = await tts.load({
-      engine: engine(), repo: repo(), gguf: gguf(), fallback: 'cpu',
+      engine: engine(), repo: repo(), gguf: gguf(),
     }, (p) => {
       if (p.overallTotal > 0) progress(p.overallLoaded / p.overallTotal);
       els.sizeNote.textContent = p.overallTotal > 0 && p.overallLoaded >= p.overallTotal
@@ -222,12 +222,9 @@ els.load.addEventListener('click', async () => {
     const runtime = loaded.engine
       + (loaded.engine === 'ggml-cpu' && loaded.wasmThreads === false
         ? ' (đơn luồng do origin HTTP)' : '');
-    const fallback = loaded.fallbackReason
-      ? ` WebGPU không khả dụng (${loaded.fallbackReason}); đã chuyển về CPU.`
-      : '';
     els.sizeNote.textContent =
       `Đã sẵn sàng — ${voices.voices.length} giọng, ${sampleRate / 1000} kHz, `
-      + `bộ máy ${runtime}.${fallback}`;
+      + `bộ máy ${runtime}.`;
     status(`Ready — ${voices.voices.length} voice(s), ${sampleRate / 1000} kHz, ${runtime}.`);
     els.voice.disabled = false;
     els.generate.disabled = false;

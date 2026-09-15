@@ -143,11 +143,9 @@ settings above.
 
 [`js/`](js/) runs the same model
 client-side — no server and no upload. Generation uses ggml/GGUF by default;
-the codec remains on `onnxruntime-web`. CPU/WebAssembly is the recommended
-device, with an experimental WebGPU option that automatically falls back to CPU
-when the browser cannot initialize it. The web API uses stable engine ids
-(`ggml-cpu`, `ggml-webgpu`, `onnx-wasm`), while generation and streaming calls
-remain unchanged when switching. See
+the codec remains on `onnxruntime-web`. Both available runtimes use
+CPU/WebAssembly. The web API uses stable engine ids (`ggml-cpu`, `onnx-wasm`),
+while generation and streaming calls remain unchanged when switching. See
 [the web installation guide](js/README.md) and [docs/BROWSER.md](docs/BROWSER.md).
 
 The default f32 GGUF plus codec downloads about 820 MB once and is persisted in

@@ -1,11 +1,11 @@
 /** One isolated benchmark process. The page creates a fresh worker per backend
- * so a retired WASM heap or GPU context cannot distort the next measurement. */
+ * so a retired WASM heap cannot distort the next measurement. */
 import * as ort from 'onnxruntime-web';
 
 import { BenchConfig, BenchResult, BenchWorkerRequest, BenchWorkerResponse, backendLabel } from './benchTypes';
 import { fetchWithCache } from './cache';
 import type { MossCodecDecoder } from './codec';
-import { assertGgmlWebGpuSupport, ZeroTTSGgml } from './ggmlBackend';
+import { ZeroTTSGgml } from './ggmlBackend';
 import { ZeroTTSBrowser } from './synthesizer';
 import { BpeTokenizer } from './tokenizer';
 import { ZeroTTSConfig } from './types';
@@ -42,10 +42,8 @@ async function loadSource(config: BenchConfig): Promise<Generator> {
   const tokenizer = await BpeTokenizer.create(tokenizerJson);
 
   if (config.backend !== 'onnx-wasm') {
-    const device = config.backend === 'ggml-webgpu' ? 'webgpu' : 'cpu';
-    if (device === 'webgpu') await assertGgmlWebGpuSupport();
     const gguf = await getBin(config.ggufBase, config.gguf);
-    return ZeroTTSGgml.create(gguf, tokenizer, config.threads, device);
+    return ZeroTTSGgml.create(gguf, tokenizer, config.threads);
   }
 
   ort.env.wasm.numThreads = self.crossOriginIsolated ? config.threads : 1;
@@ -109,7 +107,7 @@ async function benchmark(config: BenchConfig): Promise<BenchResult> {
   const effectiveThreads = generator instanceof ZeroTTSGgml
     ? generator.threadCount
     : (self.crossOriginIsolated ? config.threads : 1);
-  if (effectiveThreads !== config.threads && config.backend !== 'ggml-webgpu') {
+  if (effectiveThreads !== config.threads) {
     label = `${backendLabel(config, effectiveThreads)} · HTTP fallback`;
   }
   const voice = new Float32Array(await getBin(

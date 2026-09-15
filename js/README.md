@@ -10,7 +10,7 @@ server suy luận và không tải văn bản hay giọng của người dùng l
 
 Yêu cầu: Git, Node.js 20+, CMake 3.16+, trình biên dịch C/C++ và Emscripten.
 Các lệnh dưới đây phù hợp với Linux, macOS và WSL. Emscripten 6.0.2 là phiên bản
-đã được kiểm tra với backend WebGPU hiện tại.
+đã được kiểm tra với bản web hiện tại.
 
 ```bash
 git clone --recurse-submodules https://github.com/thuongvovan/ZeroTTS.git
@@ -22,7 +22,7 @@ git clone https://github.com/emscripten-core/emsdk.git ../emsdk
 ../emsdk/emsdk activate 6.0.2
 source ../emsdk/emsdk_env.sh
 
-# Build ba artifact: CPU đa luồng, CPU đơn luồng và WebGPU/JSPI
+# Build hai artifact CPU: đa luồng và đơn luồng
 ./cpp/build-wasm.sh
 
 # Cài và chạy web
@@ -46,7 +46,7 @@ npm run dev -- --host 0.0.0.0
 Khi truy cập bằng `http://IP:5173`, origin không đủ tin cậy để dùng
 `SharedArrayBuffer`. Demo tự chọn artifact CPU đơn luồng thay vì treo sau khi
 tải model. Chế độ này chạy chậm hơn; dùng `localhost` hoặc HTTPS có COOP/COEP để
-được đa luồng. WebGPU cần cả HTTPS/`localhost` và COOP/COEP.
+được đa luồng.
 
 Model không nằm trong bundle. Lần chạy đầu trình duyệt tải model từ Hugging Face
 và lưu trong Cache API; những lần sau dùng lại bản đã tải. Nếu chế độ riêng tư
@@ -70,16 +70,10 @@ Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-WebGPU còn yêu cầu secure context và cross-origin isolation: dùng HTTPS kèm
-COOP/COEP khi triển khai; `localhost` được trình duyệt xem là secure context
-trong lúc phát triển. Nếu WebGPU hoặc
-`shader-f16` không khả dụng, demo tự chuyển về GGML CPU và hiển thị lý do.
 Nếu trang không `crossOriginIsolated`, GGML CPU tự dùng artifact đơn luồng và
 `loaded.wasmThreads` trả về `false`.
 
-> Bản f32 GGML CPU đã được kiểm tra bit-exact với ONNX/Python. GGML WebGPU đã
-> được chạy end-to-end trong Web Worker, nhưng vẫn là tùy chọn thử nghiệm vì tốc
-> độ và tính lặp lại phụ thuộc GPU, driver và trình duyệt.
+> Bản f32 GGML CPU đã được kiểm tra bit-exact với ONNX/Python.
 
 ## The download
 
@@ -90,10 +84,10 @@ GGUFs are selectable (q8_0 at 206 MB, q4_0 at 124 MB) but are *slower*, not
 faster — see below. The UI states the size before downloading either way. See
 [../docs/BROWSER.md](../docs/BROWSER.md).
 
-## Backends và thiết bị
+## Backends
 
-**GGML/GGUF trên CPU là mặc định**. WebGPU là thiết bị thứ hai cho cùng backend;
-ONNX Runtime được giữ lại cho CFG và codec:
+**GGML/GGUF trên CPU là mặc định**. ONNX Runtime/WASM được giữ lại
+cho CFG và codec:
 
 | | download | realtime | notes |
 |---|---:|---:|---|
@@ -106,22 +100,16 @@ Realtime figures at 4 threads on one machine; the ggml backend takes
 `min(hardwareConcurrency, 8)` and gains from the extra threads, onnxruntime
 caps at 4 and does not.
 
-Mỗi GGUF có thể chạy bằng CPU/WASM hoặc WebGPU. WebGPU dùng artifact riêng và
-yêu cầu `shader-f16`; nó không mặc nhiên nhanh hơn CPU. Trên RTX A2000 đã thử,
-GGML WebGPU nhanh hơn ONNX WebGPU nhưng chậm hơn GGML CPU. Vì vậy giao diện giữ
-CPU làm mặc định và chỉ fallback WebGPU → CPU khi khởi tạo thất bại.
-
 ## API engine ổn định
 
-Ứng dụng chỉ chọn một `EngineId`; không cần tự ghép `backend` và `device`:
+Ứng dụng chỉ chọn một `EngineId`; không cần biết chi tiết runtime:
 
 | EngineId | Runtime | Điểm khác biệt |
 |---|---|---|
 | `ggml-cpu` | GGML trên WASM CPU | mặc định, GGUF/q4/q8/f32 |
-| `ggml-webgpu` | GGML trên WebGPU | thử nghiệm, cần `shader-f16` |
 | `onnx-wasm` | ONNX Runtime trên WASM CPU | hỗ trợ `cfgScale > 1` |
 
-`TtsWorker.generate()` và luồng PCM hoàn toàn giống nhau với cả ba engine. Chỉ
+`TtsWorker.generate()` và luồng PCM hoàn toàn giống nhau với cả hai engine. Chỉ
 cấu hình lúc tải thay đổi:
 
 ```ts
@@ -133,26 +121,20 @@ const engine: EngineId = 'ggml-cpu'; // chỉ đổi dòng này theo máy
 const loaded = await tts.load({
   engine,
   gguf: 'gguf/zerotts-q4_0.gguf',
-  fallback: 'cpu',
 }, onProgress);
 
-console.log(loaded.requestedEngine, loaded.engine, loaded.fallbackReason);
+console.log(loaded.engine, loaded.threads, loaded.wasmThreads);
 ```
-
-`loaded.engine` luôn là engine thực tế. Ví dụ yêu cầu `ggml-webgpu` nhưng máy
-không hỗ trợ thì `requestedEngine` vẫn là `ggml-webgpu`, `engine` là
-`ggml-cpu` và `fallbackReason` chứa nguyên nhân. Dùng `fallback: 'none'` khi
-không muốn tự chuyển, chẳng hạn trong benchmark.
 
 Đổi engine mà giữ nguyên API streaming:
 
 ```ts
-await tts.switchEngine('ggml-webgpu', onProgress);
+await tts.switchEngine('onnx-wasm', onProgress);
 // Mã gọi tts.generate(...) bên dưới không đổi.
 ```
 
-Khi đổi, Worker cũ bị kết thúc để giải phóng hẳn heap WASM, pthread và WebGPU
-context; GGUF, số thread và repo tùy chỉnh được giữ lại khi phù hợp. Model đã
+Khi đổi, Worker cũ bị kết thúc để giải phóng hẳn heap WASM và pthread;
+GGUF, số thread và repo tùy chỉnh được giữ lại khi phù hợp. Model đã
 có trong Cache API nên không phải tải lại. Có thể đọc `ENGINES[id].capabilities`
 để bật/tắt tính năng UI và gọi `await probeEngine(id)` để kiểm tra tương thích;
 probe chỉ kiểm tra khả năng chạy, còn engine nhanh nhất vẫn phải xác định bằng
@@ -165,7 +147,6 @@ Sau khi đã benchmark và xác định thứ tự mong muốn, ứng dụng có
 import { selectSupportedEngine } from './src';
 
 const engine = await selectSupportedEngine([
-  'ggml-webgpu', // ưu tiên này do ứng dụng quyết định
   'ggml-cpu',
   'onnx-wasm',
 ]);
@@ -181,7 +162,7 @@ frame codes at fp32. Everything downstream of frame generation (chunking, the
 streaming codec session, inter-segment silence) is shared, so the two backends
 differ only in `FrameSource`. The codec itself stays on onnxruntime either way.
 
-`bench-ggml.html` đo GGML CPU, GGML WebGPU và ONNX/WASM bằng cùng câu, giọng,
+`bench-ggml.html` đo GGML CPU và ONNX/WASM bằng cùng câu, giọng,
 seed và số frame. Quantized weights có thể *chậm hơn* fp32 trong WebAssembly —
 vì vậy cần đo trên máy đích thay vì suy ra từ kích thước model. Chi tiết thuật
 toán và các phép đo gốc nằm trong [`../cpp/README.md`](../cpp/README.md).
@@ -226,8 +207,8 @@ npm run benchmark
 
 Trang benchmark tự động:
 
-1. Ghi user agent, số luồng CPU, bộ nhớ trình duyệt công bố, độ phân giải và
-   thông tin adapter/tính năng WebGPU.
+1. Ghi user agent, số luồng CPU, bộ nhớ trình duyệt công bố, độ phân giải
+   và trạng thái cross-origin isolation.
 2. Warm-up bằng toàn bộ chuỗi có cùng số frame với lượt đo.
 3. Chạy 1–10 lượt, báo trung vị, khoảng min–max và tốc độ realtime.
 4. Chạy lại cùng seed, ghi hash và số mã khác nhau để phát hiện backend không
@@ -235,19 +216,16 @@ Trang benchmark tự động:
 5. Xuất một file JSON có cả cấu hình, thông tin máy và số liệu từng lượt.
 
 Để so sánh công bằng, trên mỗi máy hãy giữ nguyên GGUF, văn bản, giọng, seed,
-số frame và số lượt. Chọn **Chạy GGML CPU + WebGPU**, sau đó **Tải JSON**. WebGPU
-không fallback trên trang benchmark: máy không hỗ trợ sẽ có một hàng lỗi rõ
-ràng. Trình duyệt không có API VRAM chuẩn nên VRAM không nằm trong báo cáo.
+số frame và số lượt. Chọn **Chạy cả GGML + ONNX**, sau đó **Tải JSON**.
 
-Muốn so sánh luôn implementation cũ, chọn **Chạy cả GGML + ONNX**. Mỗi cấu hình
-chạy trong một Worker mới nên model, heap WASM và GPU context của lượt trước
+Mỗi cấu hình chạy trong một Worker mới nên model và heap WASM của lượt trước
 không còn giữ lại để làm sai phép đo kế tiếp. Nút **Dừng** kết thúc Worker hiện
 tại nếu một backend chạy quá lâu trên máy yếu.
 
 Có thể điều khiển từ DevTools hoặc công cụ tự động hóa trình duyệt:
 
 ```js
-await window.zbench.suite({
+await window.zbench.all({
   gguf: 'zerotts-q4_0.gguf',
   frames: 80,
   runs: 3,
@@ -257,8 +235,6 @@ await window.zbench.suite({
 const report = await window.zbench.report();
 console.log(JSON.stringify(report, null, 2));
 ```
-
-Thay `suite` bằng `all` để tự động chạy GGML CPU, GGML WebGPU và ONNX/WASM.
 
 Muốn dùng model tự host, mở:
 
@@ -424,9 +400,5 @@ because each one fails *quietly*.
 
 ## Known gaps
 
-- GGML WebGPU requires the optional `shader-f16` adapter feature and JSPI. Some
-  otherwise WebGPU-capable browser/GPU pairs do not expose both.
-- WebGPU may produce a different take from CPU for the same seed and, on the
-  tested backend version, repeated WebGPU runs were not always identical.
 - ONNX remains necessary for the waveform codec, and ONNX is still the only
   generation backend that implements CFG above 1.

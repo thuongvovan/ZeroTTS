@@ -7,7 +7,7 @@
 
 import { DownloadProgress } from './cache';
 import type { EngineId, EngineLoadOptions } from './engine';
-import type { Backend, GgmlDevice } from './repo';
+import type { Backend } from './repo';
 import { SamplingOptions } from './types';
 import { VoiceIndex } from './types';
 
@@ -39,15 +39,10 @@ export interface LoadedInfo {
    *  nonsense rather than an error. */
   nVoiceQueries: number;
   dModel: number;
-  /** Stable public identity. `engine` differs when the requested WebGPU engine
-   * falls back to CPU. */
-  requestedEngine: EngineId;
+  /** Stable public identity of the loaded runtime. */
   engine: EngineId;
   /** @deprecated Use `engine` and `engineDefinition(engine).backend`. */
   backend: Backend;
-  /** @deprecated Use `engine`; retained for old applications. */
-  ggmlDevice?: GgmlDevice;
-  fallbackReason?: string;
   /** Present for GGML: false means the HTTP-safe single-thread artifact. */
   wasmThreads?: boolean;
   /** Actual inference thread count. */

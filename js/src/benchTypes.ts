@@ -47,6 +47,5 @@ export type BenchWorkerResponse =
 
 export function backendLabel(config: BenchConfig, threads = config.threads): string {
   if (config.backend === 'onnx-wasm') return `ONNX/WASM · ${threads}t`;
-  const device = config.backend === 'ggml-webgpu' ? 'WebGPU' : `CPU ${threads}t`;
-  return `GGML ${config.gguf.replace(/^zerotts-|\.gguf$/g, '')} · ${device}`;
+  return `GGML ${config.gguf.replace(/^zerotts-|\.gguf$/g, '')} · CPU ${threads}t`;
 }

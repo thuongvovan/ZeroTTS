@@ -213,18 +213,14 @@ git submodule update --init cpp/vendor-ggml
 cmake -B build -DCMAKE_BUILD_TYPE=Release .
 cmake --build build -j
 
-# browser threaded CPU + single-thread CPU + experimental WebGPU
+# browser threaded CPU + HTTP-safe single-thread CPU
 source ~/emsdk/emsdk_env.sh
-./build-wasm.sh          # writes ../js/public/ggml{,-single,-webgpu}/
+./build-wasm.sh          # writes ../js/public/ggml{,-single}/
 ```
 
 The threaded CPU artifact is the browser default on an isolated origin. Plain
 HTTP over a LAN IP cannot transfer `SharedArrayBuffer`, so the loader selects
-the separate one-thread artifact. The WebGPU artifact uses JSPI because graph
-execution and GPU readback suspend its exported WASM calls; it also requires a
-secure, cross-origin-isolated context and a browser adapter exposing
-`shader-f16`. The JavaScript loader checks those requirements and falls back to
-the suitable CPU artifact when WebGPU cannot initialize.
+the separate one-thread artifact. Both artifacts run the same CPU backend.
 
 Weights:
 

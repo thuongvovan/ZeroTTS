@@ -128,9 +128,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         const info: LoadedInfo = {
           voices: loaded.voices, base: loaded.base,
           sampleRate: loaded.tts.sampleRate,
-          requestedEngine: loaded.requestedEngine, engine: loaded.engine,
-          backend: loaded.backend,
-          ggmlDevice: loaded.ggmlDevice, fallbackReason: loaded.fallbackReason,
+          engine: loaded.engine, backend: loaded.backend,
           wasmThreads: loaded.wasmThreads, threads: loaded.threads,
           nVoiceQueries: loaded.tts.nVoiceQueries, dModel: loaded.tts.dModel,
         };

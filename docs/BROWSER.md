@@ -168,35 +168,21 @@ on other hardware — worth doing, since the fp32-beats-quantized result should
 invert on a machine that is short of memory bandwidth rather than of compute.
 The benchmark page runs each measured backend in a fresh Web Worker, performs a
 full fixed-frame warm-up, repeats the measured sequence, checks same-seed output
-and exports the machine, browser, adapter, configuration and raw timings as
-JSON. Unlike the application it does not fall back, so an unsupported WebGPU
-device is visible as a failed test.
+and exports the machine, browser, configuration and raw timings as JSON.
 
-## CPU and WebGPU
+## CPU runtimes and engine switching
 
-The default remains **ggml CPU through WebAssembly**. It is the fastest and most
-reproducible browser path measured so far. The advanced settings also offer an
-experimental **ggml WebGPU** device. This is a separate Emscripten/JSPI artifact;
-the codec continues to use ONNX/WASM in either case.
+The default remains **ggml CPU through WebAssembly**. ONNX Runtime/WASM remains
+available for CFG and comparison. No GPU execution path is offered: accelerator
+kernels can change sampled output, and the measured browser GPU path did not
+beat ggml/WASM CPU reliably enough to keep its extra build and compatibility
+surface.
 
-The pinned ggml WebGPU backend requires both WebGPU and the optional
-`shader-f16` feature. The loader checks both before loading the GPU runtime. If
-the check or GPU initialization fails, it logs the reason, loads the same GGUF
-on the CPU runtime and reports that fallback in the UI. A device lost during an
-active take is reported as an error rather than silently restarting the take.
-
-WebGPU is deliberately opt-in. On an RTX A2000/Chrome test, after a full warm-up,
-ggml WebGPU generated at about 0.92x realtime versus 2.38x for ggml/WASM CPU.
-It was still about 2.3x faster than ONNX WebGPU, but repeated runs with the same
-seed did not reproduce the same codes. Browser, driver and GPU differences are
-large enough that this result must be re-measured on each target family.
-
-Applications select the stable ids `ggml-cpu`, `ggml-webgpu` or `onnx-wasm`.
-All three expose the same `TtsWorker.generate()` PCM stream. `switchEngine()`
-terminates the old Worker before loading the replacement, which releases its
-WASM heap and WebGPU context instead of letting memory from several runtimes
-accumulate. Requested and actual engine ids are both returned, so CPU fallback
-is observable. See `js/README.md#api-engine-ổn-định` for the public API.
+Applications select the stable ids `ggml-cpu` or `onnx-wasm`. Both expose the
+same `TtsWorker.generate()` PCM stream. `switchEngine()` terminates the old
+Worker before loading the replacement, which releases its WASM heap instead of
+letting memory from several runtimes accumulate. See
+`js/README.md#api-engine-ổn-định` for the public API.
 
 Build all runtime pairs before starting or bundling the demo:
 
@@ -206,35 +192,29 @@ source ~/emsdk/emsdk_env.sh
 cd cpp && ./build-wasm.sh
 ```
 
-The script writes the threaded CPU pair to `js/public/ggml/`, the single-thread
-CPU pair to `js/public/ggml-single/`, and the WebGPU pair to
-`js/public/ggml-webgpu/`. Vite copies all three directories unchanged. The
-loader selects `ggml-single` when `crossOriginIsolated` is false, which makes
-plain `http://IP:PORT` usable instead of attempting to transfer a
-`SharedArrayBuffer` to a pthread Worker. That fallback is functional but slower;
-the current WebGPU artifact still needs both a secure context and cross-origin
-isolation.
+The script writes the threaded CPU pair to `js/public/ggml/` and the
+single-thread CPU pair to `js/public/ggml-single/`. Vite copies both directories
+unchanged. The loader selects `ggml-single` when `crossOriginIsolated` is false,
+which makes plain `http://IP:PORT` usable instead of attempting to transfer a
+`SharedArrayBuffer` to a pthread Worker. That fallback is functional but slower.
 
 ## Repeating the benchmark on other machines
 
 Run `npm run benchmark` locally on each target and keep GGUF, text, voice, seed,
-frame count and run count unchanged. Use **Run GGML CPU + WebGPU**, download the
+frame count and run count unchanged. Use **Run all GGML + ONNX**, download the
 JSON, then compare `medianRealtime` and the `reproducible` flag. The report also
-records `userAgent`, `hardwareConcurrency`, `deviceMemoryGiB`, WebGPU adapter
-information and exposed features. VRAM is absent because browsers provide no
-portable API for it.
+records `userAgent`, `hardwareConcurrency`, `deviceMemoryGiB` and screen size.
 
 For automation, the page exposes:
 
 ```js
-await window.zbench.suite({ gguf: 'zerotts-q4_0.gguf', frames: 80, runs: 3 });
+await window.zbench.all({ gguf: 'zerotts-q4_0.gguf', frames: 80, runs: 3 });
 const report = await window.zbench.report();
 ```
 
-`window.zbench.all(...)` runs GGML CPU, GGML WebGPU and ONNX/WASM in order;
-each still gets a fresh Worker.
+`window.zbench.all(...)` runs GGML CPU and ONNX/WASM in order; each gets a fresh
+Worker.
 
-Use HTTPS outside localhost. Opening the dev server through another machine's
-plain `http://192.168.x.x:5173` address is not a secure context and normally
-disables WebGPU; run the benchmark locally on that machine or put the server
-behind HTTPS.
+For full multi-thread CPU performance outside localhost, use HTTPS with COOP and
+COEP headers. Plain `http://192.168.x.x:5173` remains functional through the
+single-thread fallback.

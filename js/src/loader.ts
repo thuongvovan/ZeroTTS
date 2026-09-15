@@ -13,10 +13,9 @@ import { CodecMeta, MossCodecDecoder } from './codec';
 import {
   DEFAULT_ENGINE, engineDefinition, engineFromLegacy,
 } from './engine';
-import type { EngineFallback, EngineId } from './engine';
+import type { EngineId } from './engine';
 import {
-  Backend, DEFAULT_BACKEND, DEFAULT_GGML_DEVICE, DEFAULT_GGUF, GgmlDevice,
-  modelUrls, repoBaseUrl,
+  Backend, DEFAULT_BACKEND, DEFAULT_GGUF, modelUrls, repoBaseUrl,
 } from './repo';
 import { BpeTokenizer } from './tokenizer';
 import { ZeroTTSBrowser } from './synthesizer';
@@ -25,17 +24,17 @@ import { VoiceIndex, ZeroTTSConfig } from './types';
 
 // Re-exported so the runtime side keeps one import site; the definitions live in
 // repo.ts because the page needs them without the runtime.
-export type { Backend, GgmlDevice } from './repo';
-export type { EngineFallback, EngineId, EngineLoadOptions } from './engine';
+export type { Backend } from './repo';
+export type { EngineId, EngineLoadOptions } from './engine';
 export {
-  DEFAULT_BACKEND, DEFAULT_ENGINE, DEFAULT_GGML_DEVICE, DEFAULT_GGUF, DEFAULT_REPO,
+  DEFAULT_BACKEND, DEFAULT_ENGINE, DEFAULT_GGUF, DEFAULT_REPO,
   ENGINES, GGUF_BUILDS, GGUF_REPO, ONNX_REPO, defaultRepo,
   defaultRepoForEngine, downloadInfo, engineDefinition, loadVoice, modelFiles,
   modelUrls, repoBaseUrl, voicePreviewUrl,
 } from './repo';
 
 export interface LoadOptions {
-  /** Stable engine selector. Prefer this over backend + ggmlDevice. */
+  /** Stable engine selector. Prefer this over backend. */
   engine?: EngineId;
   repo?: string;
   revision?: string;
@@ -45,26 +44,14 @@ export interface LoadOptions {
   backend?: Backend;
   /** Which GGUF to fetch, for the ggml backend. */
   gguf?: string;
-  /** CPU is the stable default. WebGPU is experimental and falls back to CPU
-   * when the browser or adapter cannot initialize the ggml backend. */
-  ggmlDevice?: GgmlDevice;
-  /** CPU fallback is the application default for WebGPU. Use `none` when an
-   * exact engine is required. */
-  fallback?: EngineFallback;
 }
 
 export interface LoadedModel {
   tts: ZeroTTSBrowser;
   voices: VoiceIndex;
   base: string;
-  /** Requested and actual engine are separate so fallback is never hidden. */
-  requestedEngine: EngineId;
   engine: EngineId;
   backend: Backend;
-  /** Actual ggml device after compatibility fallback; absent for ONNX. */
-  ggmlDevice?: GgmlDevice;
-  /** Why a requested WebGPU load continued on CPU instead. */
-  fallbackReason?: string;
   /** Whether the selected GGML artifact uses pthreads. */
   wasmThreads?: boolean;
   /** Actual inference thread count after origin/runtime constraints. */
@@ -72,13 +59,10 @@ export interface LoadedModel {
 }
 
 export async function loadModel(options: LoadOptions = {}): Promise<LoadedModel> {
-  const requestedEngine = options.engine
-    ?? engineFromLegacy(options.backend ?? DEFAULT_BACKEND,
-      options.ggmlDevice ?? DEFAULT_GGML_DEVICE);
-  const selected = engineDefinition(requestedEngine ?? DEFAULT_ENGINE);
+  const selectedEngine = options.engine
+    ?? engineFromLegacy(options.backend ?? DEFAULT_BACKEND);
+  const selected = engineDefinition(selectedEngine ?? DEFAULT_ENGINE);
   const backend = selected.backend;
-  const requestedGgmlDevice = selected.ggmlDevice ?? DEFAULT_GGML_DEVICE;
-  const fallback = options.fallback ?? 'cpu';
   const gguf = options.gguf ?? DEFAULT_GGUF;
   const base = repoBaseUrl(options.repo ?? selected.defaultRepo, options.revision);
 
@@ -95,9 +79,9 @@ export async function loadModel(options: LoadOptions = {}): Promise<LoadedModel>
     options.threads ?? (isolated ? Math.min(4, navigator.hardwareConcurrency || 4) : 1);
   ort.env.wasm.simd = true;
 
-  // ONNX stays on WASM. The WebGPU option belongs to the separate ggml
-  // generator; moving these codec/legacy-generator sessions to ONNX WebGPU was
-  // slower in measurements and would make sampling provider-dependent.
+  // WASM only. Accelerator kernels are not bit-identical to the CPU path, and
+  // this model samples inside the graph, so small numeric differences can
+  // change which token is drawn. A GPU execution provider is not offered.
   const sessionOptions: ort.InferenceSession.SessionOptions = {
     executionProviders: ['wasm'],
     graphOptimizationLevel: 'all',
@@ -153,35 +137,10 @@ export async function loadModel(options: LoadOptions = {}): Promise<LoadedModel>
     localFrameDecode: ort.InferenceSession;
   } | null = null;
   let frameSource: ZeroTTSGgml | null = null;
-  let ggmlDevice: GgmlDevice | undefined;
-  let fallbackReason: string | undefined;
 
   if (backend === 'ggml') {
-    const { ZeroTTSGgml, assertGgmlWebGpuSupport } = await import('./ggmlBackend');
-    const ggufBuffer = await get(gguf);
-    ggmlDevice = requestedGgmlDevice;
-    if (requestedGgmlDevice === 'webgpu') {
-      try {
-        await assertGgmlWebGpuSupport();
-        frameSource = await ZeroTTSGgml.create(
-          ggufBuffer, tokenizer, options.threads, 'webgpu');
-      } catch (error) {
-        fallbackReason = (error as Error)?.message ?? String(error);
-        if (fallback === 'none') throw error;
-        console.warn(`ggml WebGPU unavailable — falling back to CPU: ${fallbackReason}`);
-        ggmlDevice = 'cpu';
-      }
-    }
-    if (!frameSource) {
-      try {
-        frameSource = await ZeroTTSGgml.create(
-          ggufBuffer, tokenizer, options.threads, 'cpu');
-      } catch (error) {
-        if (!fallbackReason) throw error;
-        const cpuReason = (error as Error)?.message ?? String(error);
-        throw new Error(`WebGPU failed (${fallbackReason}); CPU fallback failed (${cpuReason})`);
-      }
-    }
+    const { ZeroTTSGgml } = await import('./ggmlBackend');
+    frameSource = await ZeroTTSGgml.create(await get(gguf), tokenizer, options.threads);
   } else {
     const [prefixBuf, localBuf, textBuf] = await Promise.all([
       get('onnx/prefix_step.onnx'),
@@ -211,11 +170,9 @@ export async function loadModel(options: LoadOptions = {}): Promise<LoadedModel>
     silenceFrame, frameSource);
 
   await tts.warmup();
-  const engine = backend === 'onnx'
-    ? 'onnx-wasm' : (ggmlDevice === 'webgpu' ? 'ggml-webgpu' : 'ggml-cpu');
   return {
-    tts, voices, base, requestedEngine, engine, backend, ggmlDevice,
-    fallbackReason, wasmThreads: frameSource?.wasmThreads,
+    tts, voices, base, engine: selected.id, backend,
+    wasmThreads: frameSource?.wasmThreads,
     threads: frameSource?.threadCount ?? Number(ort.env.wasm.numThreads ?? 1),
   };
 }

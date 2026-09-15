@@ -57,7 +57,6 @@ loadButton.addEventListener('click', async () => {
     const loaded = await worker.load({
       engine: engine.value as EngineId,
       gguf: 'gguf/zerotts-q4_0.gguf',
-      fallback: 'cpu',
     }, (progress) => {
         const done = (progress.overallLoaded / 1e6).toFixed(0);
         const total = progress.overallTotal > 0
@@ -72,11 +71,9 @@ loadButton.addEventListener('click', async () => {
       ? 'maichi'
       : (loaded.voices.voices[0]?.name ?? '');
     engine.value = loaded.engine;
-    status.textContent = loaded.fallbackReason
-      ? `WebGPU không khả dụng; đã chuyển về CPU: ${loaded.fallbackReason}`
-      : `Sẵn sàng với ${loaded.engine}`
-        + (loaded.engine === 'ggml-cpu' && loaded.wasmThreads === false
-          ? ' đơn luồng (origin HTTP).' : '.');
+    status.textContent = `Sẵn sàng với ${loaded.engine}`
+      + (loaded.engine === 'ggml-cpu' && loaded.wasmThreads === false
+        ? ' đơn luồng (origin HTTP).' : '.');
     speakButton.disabled = false;
     loadButton.disabled = false;
     loadButton.textContent = 'Đổi / tải lại engine';

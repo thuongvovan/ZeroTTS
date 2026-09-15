@@ -4,8 +4,8 @@ export {
   selectSupportedEngine,
 } from './engine';
 export type {
-  Backend, EngineCapabilities, EngineDefinition, EngineFallback, EngineId,
-  EngineLoadOptions, EngineSupport, GgmlDevice,
+  Backend, EngineCapabilities, EngineDefinition, EngineId, EngineLoadOptions,
+  EngineSupport,
 } from './engine';
 export { textSegments } from './chunking';
 export { normalizeViText } from './textNorm';

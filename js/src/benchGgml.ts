@@ -3,26 +3,9 @@ import {
   BenchConfig, BenchResult, BenchWorkerResponse, backendLabel,
 } from './benchTypes';
 
-interface WebGpuAdapterLike {
-  readonly features: Iterable<string>;
-  readonly info?: WebGpuInfoLike;
-  readonly limits?: Record<string, unknown>;
-  requestAdapterInfo?: () => Promise<WebGpuInfoLike>;
-}
-
-interface WebGpuInfoLike {
-  vendor?: string;
-  architecture?: string;
-  device?: string;
-  description?: string;
-  subgroupMinSize?: number;
-  subgroupMaxSize?: number;
-}
-
 interface NavigatorWithHardware extends Navigator {
   deviceMemory?: number;
   userAgentData?: { brands?: Array<{ brand: string; version: string }>; mobile?: boolean };
-  gpu?: { requestAdapter(options?: { powerPreference?: string }): Promise<WebGpuAdapterLike | null> };
 }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -51,43 +34,10 @@ async function inspectSystem() {
     userAgentData: nav.userAgentData ?? null,
     hardwareConcurrency: navigator.hardwareConcurrency ?? null,
     deviceMemoryGiB: nav.deviceMemory ?? null,
+    isSecureContext: self.isSecureContext,
     crossOriginIsolated: self.crossOriginIsolated,
     screen: `${screen.width}x${screen.height} @ ${devicePixelRatio}x`,
-    webgpu: { available: false },
   };
-  try {
-    const adapter = await nav.gpu?.requestAdapter({ powerPreference: 'high-performance' });
-    if (adapter) {
-      const rawInfo = adapter.info ?? await adapter.requestAdapterInfo?.() ?? {};
-      // GPUAdapterInfo/GPUSupportedLimits expose properties on their prototype,
-      // so JSON.stringify(rawInfo) is often just `{}`. Copy known fields.
-      const info = Object.fromEntries([
-        'vendor', 'architecture', 'device', 'description',
-        'subgroupMinSize', 'subgroupMaxSize',
-      ].flatMap((key) => {
-        const value = rawInfo[key as keyof WebGpuInfoLike];
-        return value === undefined || value === '' ? [] : [[key, value]];
-      }));
-      const limits = Object.fromEntries([
-        'maxBufferSize', 'maxStorageBufferBindingSize',
-        'maxComputeWorkgroupStorageSize', 'maxComputeInvocationsPerWorkgroup',
-        'maxComputeWorkgroupSizeX', 'maxComputeWorkgroupSizeY',
-        'maxComputeWorkgroupSizeZ', 'maxComputeWorkgroupsPerDimension',
-      ].flatMap((key) => {
-        const value = adapter.limits?.[key];
-        return value === undefined ? [] : [[key, value]];
-      }));
-      report.webgpu = {
-        available: true,
-        info,
-        limits,
-        shaderF16: Array.from(adapter.features).includes('shader-f16'),
-        features: Array.from(adapter.features).sort(),
-      };
-    }
-  } catch (error) {
-    report.webgpu = { available: false, error: (error as Error).message };
-  }
   return report;
 }
 
@@ -241,7 +191,6 @@ async function runCases(configs: BenchConfig[]): Promise<BenchResult[]> {
     running = false;
     cancelActive = null;
     $<HTMLButtonElement>('run-selected').disabled = false;
-    $<HTMLButtonElement>('run-suite').disabled = false;
     $<HTMLButtonElement>('run-all').disabled = false;
     $<HTMLButtonElement>('stop').disabled = true;
     $<HTMLButtonElement>('clear').disabled = false;
@@ -252,18 +201,10 @@ async function runCases(configs: BenchConfig[]): Promise<BenchResult[]> {
 }
 
 $('run-selected').addEventListener('click', () => { void runCases([readConfig()]); });
-$('run-suite').addEventListener('click', () => {
-  const base = readConfig();
-  void runCases([
-    { ...base, backend: 'ggml-cpu' },
-    { ...base, backend: 'ggml-webgpu' },
-  ]);
-});
 $('run-all').addEventListener('click', () => {
   const base = readConfig();
   void runCases([
     { ...base, backend: 'ggml-cpu' },
-    { ...base, backend: 'ggml-webgpu' },
     { ...base, backend: 'onnx-wasm' },
   ]);
 });
@@ -302,7 +243,6 @@ declare global {
   interface Window {
     zbench: {
       run(overrides?: Partial<BenchConfig>): Promise<BenchResult[]>;
-      suite(overrides?: Partial<BenchConfig>): Promise<BenchResult[]>;
       all(overrides?: Partial<BenchConfig>): Promise<BenchResult[]>;
       report(): ReturnType<typeof makeReport>;
       results: BenchResult[];
@@ -312,18 +252,10 @@ declare global {
 
 window.zbench = {
   run: (overrides = {}) => runCases([{ ...readConfig(), ...overrides }]),
-  suite: (overrides = {}) => {
-    const config = { ...readConfig(), ...overrides };
-    return runCases([
-      { ...config, backend: 'ggml-cpu' },
-      { ...config, backend: 'ggml-webgpu' },
-    ]);
-  },
   all: (overrides = {}) => {
     const config = { ...readConfig(), ...overrides };
     return runCases([
       { ...config, backend: 'ggml-cpu' },
-      { ...config, backend: 'ggml-webgpu' },
       { ...config, backend: 'onnx-wasm' },
     ]);
   },

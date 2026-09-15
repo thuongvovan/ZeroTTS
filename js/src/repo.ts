@@ -9,10 +9,10 @@
 
 import { fetchWithCache, isCached, totalBytes } from './cache';
 import {
-  Backend, DEFAULT_ENGINE, ENGINES, EngineId, GgmlDevice, engineDefinition,
+  Backend, DEFAULT_ENGINE, ENGINES, EngineId, engineDefinition,
 } from './engine';
 
-export type { Backend, EngineId, GgmlDevice } from './engine';
+export type { Backend, EngineId } from './engine';
 export { DEFAULT_ENGINE, ENGINES, engineDefinition } from './engine';
 
 /**
@@ -25,7 +25,6 @@ export { DEFAULT_ENGINE, ENGINES, engineDefinition } from './engine';
  * it is the only one that implements CFG.
  */
 export const DEFAULT_BACKEND: Backend = 'ggml';
-export const DEFAULT_GGML_DEVICE: GgmlDevice = 'cpu';
 
 /** GGUF weights for the ggml backend. */
 export const GGUF_REPO = ENGINES['ggml-cpu'].defaultRepo;

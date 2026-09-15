@@ -28,8 +28,6 @@
  */
 
 import { Rng } from './rng';
-import { probeEngine } from './engine';
-import { DEFAULT_GGML_DEVICE, GgmlDevice } from './repo';
 import { DEFAULT_SAMPLING, SamplingOptions } from './types';
 import { BpeTokenizer } from './tokenizer';
 
@@ -47,15 +45,15 @@ interface ZeroTTSWasm {
   HEAPF32: Float32Array;
   _zt_alloc(n: number): number;
   _zt_dealloc(p: number): void;
-  _zt_load(data: number, size: number, threads: number): number | Promise<number>;
+  _zt_load(data: number, size: number, threads: number): number;
   _zt_free(ctx: number): void;
   _zt_hparam(ctx: number, which: number): number;
-  _zt_begin(ctx: number, ids: number, n: number, voice: number): number | Promise<number>;
+  _zt_begin(ctx: number, ids: number, n: number, voice: number): number;
   _zt_frame(ctx: number, forbidEoa: number, textTemp: number, textTopK: number,
             audioTemp: number, audioTopK: number, audioTopP: number,
             audioRepPenalty: number, ctrlU: number, audioU: number,
-            outCodes: number, outIsEoa: number): number | Promise<number>;
-  _zt_advance(ctx: number, codes: number, t: number): number | Promise<number>;
+            outCodes: number, outIsEoa: number): number;
+  _zt_advance(ctx: number, codes: number, t: number): number;
   _zt_timings(ctx: number, out: number): void;
   _zt_reset_timings(ctx: number): void;
 }
@@ -63,24 +61,12 @@ interface ZeroTTSWasm {
 /** Select the threaded CPU artifact only when SharedArrayBuffer may be sent to
  * its pthread workers. Plain HTTP over a LAN IP is not cross-origin isolated,
  * so it must use the separate single-thread build. */
-function wasmUrl(device: GgmlDevice): { url: string; threaded: boolean } {
-  if (device === 'webgpu') {
-    return { url: '/ggml-webgpu/zerotts-wasm.js', threaded: true };
-  }
+function wasmRuntime(): { url: string; threaded: boolean } {
   const threaded = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
   return {
     url: threaded ? '/ggml/zerotts-wasm.js' : '/ggml-single/zerotts-wasm.js',
     threaded,
   };
-}
-
-/** Fail before instantiating the GPU runtime when this pinned ggml WebGPU
- * backend cannot run. Shader f16 is currently a hard requirement in ggml, even
- * for an f32 GGUF. The backend requests its own adapter after this compatibility
- * probe; this one is deliberately not retained. */
-export async function assertGgmlWebGpuSupport(): Promise<void> {
-  const support = await probeEngine('ggml-webgpu');
-  if (!support.supported) throw new Error(support.reason ?? 'WebGPU is unavailable');
 }
 
 export interface GgmlTimings {
@@ -111,7 +97,6 @@ export class ZeroTTSGgml {
     private readonly M: ZeroTTSWasm,
     private readonly ctx: number,
     readonly tokenizer: BpeTokenizer,
-    readonly device: GgmlDevice,
     readonly wasmThreads: boolean,
     readonly threadCount: number,
   ) {
@@ -135,7 +120,6 @@ export class ZeroTTSGgml {
    */
   static async create(
     gguf: ArrayBuffer, tokenizer: BpeTokenizer, threads?: number,
-    device: GgmlDevice = DEFAULT_GGML_DEVICE,
   ): Promise<ZeroTTSGgml> {
     // Imported through a constructed function so the bundler never sees this as
     // an import site. Emscripten's output is a pre-built ES module that resolves
@@ -144,14 +128,12 @@ export class ZeroTTSGgml {
     // module has to be fetched exactly as served from public/.
     const dynamicImport = new Function('u', 'return import(u)') as
       (u: string) => Promise<{ default: () => Promise<ZeroTTSWasm> }>;
-    const runtime = wasmUrl(device);
+    const runtime = wasmRuntime();
     const factory = (await dynamicImport(runtime.url)).default;
     const M: ZeroTTSWasm = await factory();
 
-    const n = device === 'cpu'
-      ? (runtime.threaded
-          ? (threads ?? Math.min(navigator.hardwareConcurrency || 4, 8))
-          : 1)
+    const n = runtime.threaded
+      ? (threads ?? Math.min(navigator.hardwareConcurrency || 4, 8))
       : 1;
 
     // The whole file has to be in the WASM heap for gguf to parse it, and the
@@ -163,13 +145,13 @@ export class ZeroTTSGgml {
     M.HEAPU8.set(bytes, stage);
     let ctx = 0;
     try {
-      ctx = await M._zt_load(stage, bytes.length, n);
+      ctx = M._zt_load(stage, bytes.length, n);
     } finally {
       M._zt_dealloc(stage);
     }
     if (!ctx) throw new Error('ggml: failed to load the GGUF model');
 
-    return new ZeroTTSGgml(M, ctx, tokenizer, device, runtime.threaded, n);
+    return new ZeroTTSGgml(M, ctx, tokenizer, runtime.threaded, n);
   }
 
   free(): void {
@@ -222,7 +204,7 @@ export class ZeroTTSGgml {
     try {
       M.HEAP32.set(ids, idsPtr >> 2);
       M.HEAPF32.set(voiceEmb, voicePtr >> 2);
-      if (await M._zt_begin(ctx, idsPtr, ids.length, voicePtr) !== 0) {
+      if (M._zt_begin(ctx, idsPtr, ids.length, voicePtr) !== 0) {
         throw new Error('ggml: zt_begin failed');
       }
     } finally {
@@ -241,10 +223,10 @@ export class ZeroTTSGgml {
       rng.fill(au);
       M.HEAPF32.set(au, this.auPtr >> 2);
 
-      if (await M._zt_frame(ctx, forbidEoa, opts.textTemperature, opts.textTopK,
-                            opts.audioTemperature, opts.audioTopK, opts.audioTopP,
-                            opts.audioRepetitionPenalty, ctrlU, this.auPtr,
-                            this.codePtr, this.eoaPtr) !== 0) {
+      if (M._zt_frame(ctx, forbidEoa, opts.textTemperature, opts.textTopK,
+                      opts.audioTemperature, opts.audioTopK, opts.audioTopP,
+                      opts.audioRepetitionPenalty, ctrlU, this.auPtr,
+                      this.codePtr, this.eoaPtr) !== 0) {
         throw new Error(`ggml: zt_frame failed at frame ${t}`);
       }
       const isEoa = M.HEAP32[this.eoaPtr >> 2] !== 0;
@@ -263,7 +245,7 @@ export class ZeroTTSGgml {
         if (tailLeft <= 0) return;
       }
 
-      if (await M._zt_advance(ctx, this.codePtr, t) !== 0) {
+      if (M._zt_advance(ctx, this.codePtr, t) !== 0) {
         throw new Error(`ggml: zt_advance failed at frame ${t}`);
       }
     }

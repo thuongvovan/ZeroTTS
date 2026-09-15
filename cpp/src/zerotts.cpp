@@ -20,11 +20,7 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
-#ifdef ZEROTTS_WEBGPU
-#include "ggml-webgpu.h"
-#else
 #include "ggml-cpu.h"
-#endif
 #include "gguf.h"
 
 #include <algorithm>
@@ -450,26 +446,10 @@ static int zt_default_threads(int n) {
     return hc ? (int) std::min(hc, 8u) : 4;
 }
 
-static ggml_backend_t zt_backend_init() {
-#ifdef ZEROTTS_WEBGPU
-    return ggml_backend_webgpu_init();
-#else
-    return ggml_backend_cpu_init();
-#endif
-}
-
-static void zt_backend_prepare(zerotts_context * m) {
-#ifndef ZEROTTS_WEBGPU
-    ggml_backend_cpu_set_n_threads(m->backend, m->n_threads);
-#else
-    (void) m;
-#endif
-}
-
 zerotts_context * zerotts_init_from_file(const char * path, int n_threads) {
     auto * m = new zerotts_context();
     m->n_threads = zt_default_threads(n_threads);
-    m->backend = zt_backend_init();
+    m->backend = ggml_backend_cpu_init();
     if (!m->backend) { delete m; return nullptr; }
 
     loader L;
@@ -494,7 +474,7 @@ zerotts_context * zerotts_init_from_buffer(const void * data, size_t size, int n
     // filesystem first would double the peak memory for no reason.
     auto * m = new zerotts_context();
     m->n_threads = zt_default_threads(n_threads);
-    m->backend = zt_backend_init();
+    m->backend = ggml_backend_cpu_init();
     if (!m->backend) { delete m; return nullptr; }
 
     FILE * f = fmemopen(const_cast<void *>(data), size, "rb");
@@ -582,7 +562,7 @@ static bool zt_compute(zerotts_context * m, scratch & s) {
         fprintf(stderr, "zerotts: graph allocation failed\n");
         return false;
     }
-    zt_backend_prepare(m);
+    ggml_backend_cpu_set_n_threads(m->backend, m->n_threads);
     return ggml_backend_graph_compute(m->backend, s.gf) == GGML_STATUS_SUCCESS;
 }
 
@@ -640,7 +620,7 @@ static bool zt_run_text(zerotts_context * m, const int32_t * ids, int n_text) {
     std::iota(pos.begin(), pos.end(), 0);
     ggml_backend_tensor_set(in_pos, pos.data(), 0, n_text * sizeof(int32_t));
 
-    zt_backend_prepare(m);
+    ggml_backend_cpu_set_n_threads(m->backend, m->n_threads);
     return ggml_backend_graph_compute(m->backend, s.gf) == GGML_STATUS_SUCCESS;
 }
 
@@ -682,7 +662,7 @@ static bool zt_run_voice_prefix(zerotts_context * m, const float * voice) {
     std::iota(pos.begin(), pos.end(), 0);
     ggml_backend_tensor_set(in_pos, pos.data(), 0, V * sizeof(int32_t));
 
-    zt_backend_prepare(m);
+    ggml_backend_cpu_set_n_threads(m->backend, m->n_threads);
     return ggml_backend_graph_compute(m->backend, s.gf) == GGML_STATUS_SUCCESS;
 }
 
@@ -745,7 +725,7 @@ static bool zt_run_decoder_step(zerotts_context * m, const int32_t * codes, int 
     const int32_t p = position;
     ggml_backend_tensor_set(in_pos, &p, 0, sizeof(p));
 
-    zt_backend_prepare(m);
+    ggml_backend_cpu_set_n_threads(m->backend, m->n_threads);
     if (ggml_backend_graph_compute(m->backend, s.gf) != GGML_STATUS_SUCCESS) return false;
 
     ggml_backend_tensor_get(out, m->h.data(), 0, (size_t) hp.d_model * sizeof(float));
@@ -832,7 +812,7 @@ static bool zt_local_step(zerotts_context * m, int depth,
         ggml_backend_tensor_set(in_id, &embed_id, 0, sizeof(embed_id));
     }
 
-    zt_backend_prepare(m);
+    ggml_backend_cpu_set_n_threads(m->backend, m->n_threads);
     if (ggml_backend_graph_compute(m->backend, s.gf) != GGML_STATUS_SUCCESS) return false;
 
     ggml_backend_tensor_get(logits, out_logits, 0, (size_t) n_logits * sizeof(float));

@@ -27,8 +27,9 @@ import { DEFAULT_SAMPLING, SamplingOptions, ZeroTTSConfig } from './types';
  * BigInt64Array()"). Two things make that easy to hit:
  *
  *  - a graph's int64 OUTPUT is not guaranteed to come back as a BigInt64Array
- *    across ORT-web versions and execution providers (WebGPU in particular has
- *    no native int64), and `outputs.x.data as BigInt64Array` is a TypeScript
+ *    across ORT-web versions and execution providers (some accelerator
+ *    providers have no native int64), and `outputs.x.data as BigInt64Array` is
+ *    a TypeScript
  *    cast that asserts rather than checks — so a wrong type survives until the
  *    value is fed back in as an input;
  *  - a typed array from another realm fails `instanceof`.

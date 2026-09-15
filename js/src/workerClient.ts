@@ -13,7 +13,7 @@ import {
   DEFAULT_ENGINE, engineDefinition, engineFromLegacy,
 } from './engine';
 import type { EngineId, EngineLoadOptions } from './engine';
-import type { Backend, GgmlDevice } from './repo';
+import type { Backend } from './repo';
 import {
   GenerateParams, LoadedInfo, WorkerRequest, WorkerResponse,
 } from './workerProtocol';
@@ -115,21 +115,21 @@ export class TtsWorker {
   /** @deprecated Use load({ engine, repo, gguf }, onProgress). */
   load(
     repo: string, onProgress?: (p: DownloadProgress) => void,
-    backend?: Backend, gguf?: string, ggmlDevice?: GgmlDevice,
+    backend?: Backend, gguf?: string,
   ): Promise<LoadedInfo>;
   load(
     optionsOrRepo: EngineLoadOptions | string = {}, onProgress?: (p: DownloadProgress) => void,
-    backend?: Backend, gguf?: string, ggmlDevice?: GgmlDevice,
+    backend?: Backend, gguf?: string,
   ): Promise<LoadedInfo> {
     const options: EngineLoadOptions = typeof optionsOrRepo === 'string'
       ? {
           repo: optionsOrRepo,
-          engine: engineFromLegacy(backend, ggmlDevice),
+          engine: engineFromLegacy(backend),
           gguf,
         }
       : optionsOrRepo;
     // Terminating the previous Worker is the only portable way to release its
-    // WASM heap, pthread pool and WebGPU context before another engine loads.
+    // WASM heap and pthread pool before another engine loads.
     if (this.hasLoadAttempted) this.restartWorker();
     this.hasLoadAttempted = true;
     this.lastLoadOptions = { ...options };
