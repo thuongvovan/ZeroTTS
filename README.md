@@ -73,6 +73,46 @@ pip install "zerotts[eval]"    # benchmark scorers — these DO need torch
 The `eval` extra is the only thing in this repo that installs PyTorch, and it is
 for *measuring* quality, not for generating audio.
 
+### CPU or NVIDIA GPU
+
+The default installation runs on CPU:
+
+```bash
+pip install zerotts
+```
+
+When installing from a cloned copy of this repository, use `pip install .`
+instead.
+
+For an NVIDIA GPU, first check that `nvidia-smi` works, then replace the CPU
+runtime with the GPU runtime and install CUDA 12/cuDNN:
+
+```bash
+pip install zerotts
+pip uninstall -y onnxruntime
+pip install onnxruntime-gpu nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12
+```
+
+Do not keep `onnxruntime` and `onnxruntime-gpu` installed together. The GPU
+package can run both providers; select one when loading the model:
+
+```python
+import onnxruntime as ort
+
+if hasattr(ort, "preload_dlls"):
+    ort.preload_dlls()
+
+from zerotts import ZeroTTS
+
+provider = "CUDAExecutionProvider"  # use "CPUExecutionProvider" for CPU
+tts = ZeroTTS.from_pretrained(
+    "zeroweight-ai/ZeroTTS",
+    providers=[provider],
+)
+
+print(ort.get_available_providers())
+```
+
 ## Usage
 
 ## Web UI
