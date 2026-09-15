@@ -65,6 +65,7 @@ class ZeroTTS:
         providers: list[str] | None = None,
         intra_op_num_threads: int = 4,
         codec_intra_op_num_threads: int | None = None,
+        cuda_io_binding: bool = True,
         warmup: bool = True,
     ):
         import onnxruntime as ort
@@ -72,6 +73,18 @@ class ZeroTTS:
         model_dir = Path(model_dir)
         self.model_dir = model_dir
         self.providers = providers or ["CPUExecutionProvider"]
+        first_provider = self.providers[0]
+        first_provider_name = (
+            first_provider if isinstance(first_provider, str) else first_provider[0]
+        )
+        first_provider_options = (
+            {} if isinstance(first_provider, str) else first_provider[1]
+        )
+        self._cuda_device_id = int(first_provider_options.get("device_id", 0))
+        if first_provider_name == "CUDAExecutionProvider" and hasattr(ort, "preload_dlls"):
+            # Finds CUDA/cuDNN from PyTorch, NVIDIA's Python packages, or the
+            # system path. It is a no-op on older ORT builds and CPU runs.
+            ort.preload_dlls()
         config = hub.load_config(model_dir)
         self.config = config
 
@@ -90,6 +103,16 @@ class ZeroTTS:
         self.prefix_step_sess = _session("prefix_step.onnx")
         self.local_frame_decode_sess = _session("local_frame_decode.onnx")
         self.text_encoder_sess = _session("text_encoder.onnx")
+
+        # Session.run() always materialises outputs as NumPy arrays. On CUDA
+        # that would copy the growing self-attention KV cache to host memory
+        # after every frame, only to upload it again for the next frame. Keep
+        # long-lived transformer state on the device with I/O binding instead.
+        self._cuda_io_binding = (
+            cuda_io_binding
+            and "CUDAExecutionProvider" in self.prefix_step_sess.get_providers()
+            and first_provider_name == "CUDAExecutionProvider"
+        )
 
         self.num_codebooks = int(config["num_codebooks"])
         self.codebook_size = int(config["codebook_size"])
@@ -170,6 +193,16 @@ class ZeroTTS:
             n_voice=self.null_voice_emb.shape[1],
             cross_kv=cross_kv, text_valid=text_valid)
 
+        # The autoregressive calls above do not exercise either codec graph.
+        # Without these calls, first synthesis still pays CUDA/cuDNN setup.
+        silence = np.zeros((1, self.num_codebooks, 1), dtype=np.int64)
+        self.codec.decode(silence)
+        stream = self.codec.streaming_decoder()
+        try:
+            stream.decode_chunk(silence)
+        finally:
+            stream.close()
+
     # ── voices ───────────────────────────────────────────────────────────────
 
     def add_voices(self, path: str | Path) -> list:
@@ -248,6 +281,22 @@ class ZeroTTS:
 
     # ── prefix_step.onnx (cold start + per-frame step share one session) ──────
 
+    def _run_cuda_bound(self, session, cpu_inputs, device_inputs, output_devices):
+        """Run an ORT session while retaining selected values on CUDA.
+
+        Output order follows ``output_devices`` so callers can name the returned
+        OrtValues without depending on the graph's complete output list.
+        """
+        io = session.io_binding()
+        for name, value in cpu_inputs.items():
+            io.bind_cpu_input(name, np.ascontiguousarray(value))
+        for name, value in device_inputs.items():
+            io.bind_ortvalue_input(name, value)
+        for name, device in output_devices:
+            io.bind_output(name, device_type=device, device_id=self._cuda_device_id)
+        session.run_with_iobinding(io)
+        return dict(zip((name for name, _device in output_devices), io.get_outputs()))
+
     def _prefix_step_init(self, text_ids: np.ndarray, txt_lengths: np.ndarray,
                           voice_emb: np.ndarray):
         """Cold start: build the [voice | soa] prefix from an empty KV cache.
@@ -271,31 +320,60 @@ class ZeroTTS:
         # prefix_step takes them precomputed instead of re-deriving both
         # projections from text_states on every frame. text_states itself is no
         # longer fed anywhere; it is returned for inspection only.
-        _text_states, text_valid, soa_embed, cross_kv = self.text_encoder_sess.run(
-            None,
-            {"text_ids": np.ascontiguousarray(text_ids),
-             "txt_lengths": np.ascontiguousarray(txt_lengths)},
-        )
+        if self._cuda_io_binding:
+            encoded = self._run_cuda_bound(
+                self.text_encoder_sess,
+                {"text_ids": text_ids, "txt_lengths": txt_lengths},
+                {},
+                [
+                    ("text_valid", "cuda"),
+                    ("soa_embed", "cpu"),
+                    ("cross_kv", "cuda"),
+                ],
+            )
+            text_valid = encoded["text_valid"]
+            soa_embed = encoded["soa_embed"].numpy()
+            cross_kv = encoded["cross_kv"]
+        else:
+            _text_states, text_valid, soa_embed, cross_kv = self.text_encoder_sess.run(
+                None,
+                {"text_ids": np.ascontiguousarray(text_ids),
+                 "txt_lengths": np.ascontiguousarray(txt_lengths)},
+            )
         external_embed = np.concatenate(
             [voice_emb.astype(np.float32), soa_embed.astype(np.float32)], axis=1)
         T = V + 1
-        hidden, packed_kv, full_valid = self.prefix_step_sess.run(
-            None,
-            {
-                "external_embed": external_embed,
-                "use_external_embed": np.ones((B, T), dtype=bool),
-                "frame_codes": np.zeros((B, T, self.num_codebooks), dtype=np.int64),
-                "new_pos": np.tile(np.arange(T, dtype=np.int64), (B, 1)),
-                "new_valid": np.ones((B, T), dtype=bool),
-                "packed_kv": np.zeros(
-                    (self.n_layers, 2, B, self.n_heads, 0, self.d_head), dtype=np.float32),
-                "new_bidirectional": np.concatenate(
-                    [np.ones((B, V), dtype=bool), np.zeros((B, 1), dtype=bool)], axis=1),
-                "past_valid": np.zeros((B, 0), dtype=bool),
-                "cross_kv": cross_kv,
-                "text_valid": text_valid,
-            },
-        )
+        prefix_inputs = {
+            "external_embed": external_embed,
+            "use_external_embed": np.ones((B, T), dtype=bool),
+            "frame_codes": np.zeros((B, T, self.num_codebooks), dtype=np.int64),
+            "new_pos": np.tile(np.arange(T, dtype=np.int64), (B, 1)),
+            "new_valid": np.ones((B, T), dtype=bool),
+            "packed_kv": np.zeros(
+                (self.n_layers, 2, B, self.n_heads, 0, self.d_head), dtype=np.float32),
+            "new_bidirectional": np.concatenate(
+                [np.ones((B, V), dtype=bool), np.zeros((B, 1), dtype=bool)], axis=1),
+            "past_valid": np.zeros((B, 0), dtype=bool),
+        }
+        if self._cuda_io_binding:
+            prefixed = self._run_cuda_bound(
+                self.prefix_step_sess,
+                prefix_inputs,
+                {"cross_kv": cross_kv, "text_valid": text_valid},
+                [
+                    ("hidden", "cpu"),
+                    ("new_packed_kv", "cuda"),
+                    ("full_valid", "cuda"),
+                ],
+            )
+            hidden = prefixed["hidden"].numpy()
+            packed_kv = prefixed["new_packed_kv"]
+            full_valid = prefixed["full_valid"]
+        else:
+            hidden, packed_kv, full_valid = self.prefix_step_sess.run(
+                None,
+                {**prefix_inputs, "cross_kv": cross_kv, "text_valid": text_valid},
+            )
         return hidden[:, -1, :], packed_kv, full_valid, cross_kv, text_valid
 
     def _prefix_step_frame(self, frame_codes: np.ndarray, frame_index: np.ndarray,
@@ -310,26 +388,50 @@ class ZeroTTS:
         The frame is tiled across the guidance batch: one sampled frame is the
         history BOTH branches continue from.
         """
-        B = packed_kv.shape[2]
+        packed_shape = packed_kv.shape() if self._cuda_io_binding else packed_kv.shape
+        B = packed_shape[2]
         if frame_codes.shape[0] != B:
             frame_codes = np.broadcast_to(frame_codes, (B,) + frame_codes.shape[1:])
         new_pos = (n_voice + 1 + frame_index).astype(np.int64)
         new_pos = np.tile(new_pos.reshape(1, 1), (B, 1))
-        hidden, new_packed_kv, new_full_valid = self.prefix_step_sess.run(
-            None,
-            {
-                "external_embed": np.zeros((B, 1, self.d_model), dtype=np.float32),
-                "use_external_embed": np.zeros((B, 1), dtype=bool),
-                "frame_codes": np.ascontiguousarray(frame_codes),
-                "new_pos": new_pos,
-                "new_valid": np.ones((B, 1), dtype=bool),
-                "packed_kv": packed_kv,
-                "past_valid": full_valid,
-                "cross_kv": cross_kv,
-                "new_bidirectional": np.zeros((B, 1), dtype=bool),
-                "text_valid": text_valid,
-            },
-        )
+        prefix_inputs = {
+            "external_embed": np.zeros((B, 1, self.d_model), dtype=np.float32),
+            "use_external_embed": np.zeros((B, 1), dtype=bool),
+            "frame_codes": np.ascontiguousarray(frame_codes),
+            "new_pos": new_pos,
+            "new_valid": np.ones((B, 1), dtype=bool),
+            "new_bidirectional": np.zeros((B, 1), dtype=bool),
+        }
+        if self._cuda_io_binding:
+            stepped = self._run_cuda_bound(
+                self.prefix_step_sess,
+                prefix_inputs,
+                {
+                    "packed_kv": packed_kv,
+                    "past_valid": full_valid,
+                    "cross_kv": cross_kv,
+                    "text_valid": text_valid,
+                },
+                [
+                    ("hidden", "cpu"),
+                    ("new_packed_kv", "cuda"),
+                    ("full_valid", "cuda"),
+                ],
+            )
+            hidden = stepped["hidden"].numpy()
+            new_packed_kv = stepped["new_packed_kv"]
+            new_full_valid = stepped["full_valid"]
+        else:
+            hidden, new_packed_kv, new_full_valid = self.prefix_step_sess.run(
+                None,
+                {
+                    **prefix_inputs,
+                    "packed_kv": packed_kv,
+                    "past_valid": full_valid,
+                    "cross_kv": cross_kv,
+                    "text_valid": text_valid,
+                },
+            )
         return hidden[:, -1, :], new_packed_kv, new_full_valid
 
     # ── frame generation ─────────────────────────────────────────────────────

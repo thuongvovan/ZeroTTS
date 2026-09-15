@@ -113,6 +113,19 @@ tts = ZeroTTS.from_pretrained(
 print(ort.get_available_providers())
 ```
 
+CUDA I/O binding is enabled by default. It keeps the autoregressive KV cache on
+the GPU and avoids copying it through CPU memory after every generated frame.
+The normal warm-up also covers both batch and streaming codec paths. To use the
+original CUDA path for troubleshooting, disable the optimisation explicitly:
+
+```python
+tts = ZeroTTS.from_pretrained(
+    "zeroweight-ai/ZeroTTS",
+    providers=["CUDAExecutionProvider"],
+    cuda_io_binding=False,
+)
+```
+
 ## Usage
 
 ## Web UI
