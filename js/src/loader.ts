@@ -6,7 +6,7 @@
  * machine.
  */
 
-import * as ort from 'onnxruntime-web';
+import * as ort from 'onnxruntime-web/wasm';
 
 import { fetchWithCache, ProgressFn, totalBytes } from './cache';
 import { CodecMeta, MossCodecDecoder } from './codec';
@@ -17,6 +17,7 @@ import type { EngineId } from './engine';
 import {
   Backend, DEFAULT_BACKEND, DEFAULT_GGUF, modelUrls, repoBaseUrl,
 } from './repo';
+import type { RuntimeAssets } from './runtimeAssets';
 import { BpeTokenizer } from './tokenizer';
 import { ZeroTTSBrowser } from './synthesizer';
 import type { ZeroTTSGgml } from './ggmlBackend';
@@ -44,6 +45,8 @@ export interface LoadOptions {
   backend?: Backend;
   /** Which GGUF to fetch, for the ggml backend. */
   gguf?: string;
+  /** Package assets resolved on the main thread; not part of the public API. */
+  runtimeAssets: RuntimeAssets;
 }
 
 export interface LoadedModel {
@@ -58,7 +61,7 @@ export interface LoadedModel {
   threads: number;
 }
 
-export async function loadModel(options: LoadOptions = {}): Promise<LoadedModel> {
+export async function loadModel(options: LoadOptions): Promise<LoadedModel> {
   const selectedEngine = options.engine
     ?? engineFromLegacy(options.backend ?? DEFAULT_BACKEND);
   const selected = engineDefinition(selectedEngine ?? DEFAULT_ENGINE);
@@ -78,6 +81,7 @@ export async function loadModel(options: LoadOptions = {}): Promise<LoadedModel>
   ort.env.wasm.numThreads =
     options.threads ?? (isolated ? Math.min(4, navigator.hardwareConcurrency || 4) : 1);
   ort.env.wasm.simd = true;
+  ort.env.wasm.wasmPaths = { wasm: options.runtimeAssets.ortWasm };
 
   // WASM only. Accelerator kernels are not bit-identical to the CPU path, and
   // this model samples inside the graph, so small numeric differences can
@@ -140,7 +144,9 @@ export async function loadModel(options: LoadOptions = {}): Promise<LoadedModel>
 
   if (backend === 'ggml') {
     const { ZeroTTSGgml } = await import('./ggmlBackend');
-    frameSource = await ZeroTTSGgml.create(await get(gguf), tokenizer, options.threads);
+    frameSource = await ZeroTTSGgml.create(
+      await get(gguf), tokenizer, options.runtimeAssets, options.threads,
+    );
   } else {
     const [prefixBuf, localBuf, textBuf] = await Promise.all([
       get('onnx/prefix_step.onnx'),

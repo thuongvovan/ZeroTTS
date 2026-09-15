@@ -1,0 +1,50 @@
+{
+  "name": "zerotts-web",
+  "version": "0.1.0",
+  "description": "Browser-only ZeroTTS library with streaming PCM output",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "vite build --config js/vite.lib.config.ts && tsc -p js/tsconfig.lib.json",
+    "prepare": "npm run build",
+    "typecheck": "tsc -p js/tsconfig.json --noEmit",
+    "test": "node --loader ./js/test/ts-loader.mjs js/test/engine.mjs"
+  },
+  "keywords": [
+    "tts",
+    "text-to-speech",
+    "vietnamese",
+    "webassembly",
+    "browser"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thuongvovan/ZeroTTS.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@huggingface/transformers": "^3.3.0",
+    "esbuild": "^0.24.0",
+    "onnxruntime-web": "^1.20.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }
+}

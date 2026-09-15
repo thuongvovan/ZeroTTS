@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Build threaded and single-thread CPU browser runtimes, then drop them where
-# Vite serves them.
+# Build threaded and single-thread CPU browser runtimes, then stage the package
+# assets consumed by Vite and downstream application bundlers.
 #
 # Needs the Emscripten SDK on PATH (source ~/emsdk/emsdk_env.sh). Threaded CPU
-# artifacts land in js/public/ggml/ and the HTTP-safe single-thread fallback in
-# js/public/ggml-single/. Vite copies these directories verbatim. Each JS file
-# locates its sibling WASM, so each pair must stay together.
+# artifacts land in js/runtime/ggml/ and the HTTP-safe single-thread fallback in
+# js/runtime/ggml-single/.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -20,13 +19,27 @@ cmake --build build-wasm -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
 emcmake cmake -B build-wasm-single -DCMAKE_BUILD_TYPE=Release -DZEROTTS_WASM_THREADS=OFF .
 cmake --build build-wasm-single -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
 
-mkdir -p ../js/public/ggml ../js/public/ggml-single
-cp build-wasm/zerotts-wasm.js build-wasm/zerotts-wasm.wasm ../js/public/ggml/
-cp build-wasm-single/zerotts-wasm.js build-wasm-single/zerotts-wasm.wasm ../js/public/ggml-single/
+mkdir -p ../js/runtime/ggml ../js/runtime/ggml-single
+
+# Emscripten's pthread launcher hardcodes the un-hashed output filename. The
+# runtime may be renamed by an application bundler, so make it spawn its current
+# module URL instead. Keep this checked: a changed Emscripten template must fail
+# the build rather than produce a package whose threaded mode breaks at runtime.
+threaded_js=build-wasm/zerotts-wasm.js
+if ! grep -q 'new URL("zerotts-wasm.js",import.meta.url)' "$threaded_js"; then
+    echo "unexpected Emscripten pthread launcher in $threaded_js" >&2
+    exit 1
+fi
+sed 's/new URL("zerotts-wasm.js",import.meta.url)/new URL(import.meta.url)/g' \
+    "$threaded_js" > ../js/runtime/ggml/zerotts-wasm.js
+cp build-wasm/zerotts-wasm.wasm ../js/runtime/ggml/
+cp build-wasm-single/zerotts-wasm.js build-wasm-single/zerotts-wasm.wasm \
+    ../js/runtime/ggml-single/
 
 # bench-ggml.html fetches GGUFs from /ggml/models/. A relative symlink keeps the
 # (large, gitignored) weights in cpp/models rather than copying them into the
 # served tree. Vite's dev server follows it; both ends of the link are ignored.
+mkdir -p ../js/public/ggml
 ln -sfn ../../../cpp/models ../js/public/ggml/models
 
-ls -la ../js/public/ggml/ ../js/public/ggml-single/
+ls -la ../js/runtime/ggml/ ../js/runtime/ggml-single/

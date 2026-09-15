@@ -14,6 +14,7 @@ import {
 } from './engine';
 import type { EngineId, EngineLoadOptions } from './engine';
 import type { Backend } from './repo';
+import { DEFAULT_RUNTIME_ASSETS } from './runtimeAssets';
 import {
   GenerateParams, LoadedInfo, WorkerRequest, WorkerResponse,
 } from './workerProtocol';
@@ -134,7 +135,10 @@ export class TtsWorker {
     this.hasLoadAttempted = true;
     this.lastLoadOptions = { ...options };
     return this.request<LoadedInfo>(
-      { type: 'load', id: this.nextId++, options }, { onProgress }).then((loaded) => {
+      {
+        type: 'load', id: this.nextId++, options,
+        runtimeAssets: DEFAULT_RUNTIME_ASSETS,
+      }, { onProgress }).then((loaded) => {
         this.activeEngine = loaded.engine;
         return loaded;
       });

@@ -3,6 +3,11 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   // onnxruntime-web ships .wasm/.mjs assets that must not be inlined or renamed.
   optimizeDeps: { exclude: ['onnxruntime-web'] },
+  resolve: {
+    // This project uses only ORT's CPU/WASM execution provider. Transformers.js
+    // imports the broad entry for its Tensor helpers, so keep it on WASM too.
+    alias: [{ find: /^onnxruntime-web$/, replacement: 'onnxruntime-web/wasm' }],
+  },
   build: {
     target: 'es2022',
     assetsInlineLimit: 0,

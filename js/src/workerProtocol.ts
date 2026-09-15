@@ -8,6 +8,7 @@
 import { DownloadProgress } from './cache';
 import type { EngineId, EngineLoadOptions } from './engine';
 import type { Backend } from './repo';
+import type { RuntimeAssets } from './runtimeAssets';
 import { SamplingOptions } from './types';
 import { VoiceIndex } from './types';
 
@@ -52,7 +53,7 @@ export interface LoadedInfo {
 export type WorkerRequest =
   | { type: 'downloadInfo'; id: number; options: EngineLoadOptions }
   | { type: 'clearCache'; id: number }
-  | { type: 'load'; id: number; options: EngineLoadOptions }
+  | { type: 'load'; id: number; options: EngineLoadOptions; runtimeAssets: RuntimeAssets }
   | { type: 'generate'; id: number; params: GenerateParams }
   /** Cancels the in-flight `generate` whose id is `target`. */
   | { type: 'cancel'; id: number; target: number };

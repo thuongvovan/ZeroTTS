@@ -1,10 +1,54 @@
 # ZeroTTS browser demo
 
+## Cài như thư viện từ Git
+
+Repository có thể được cài trực tiếp vào một ứng dụng JavaScript/TypeScript:
+
+```bash
+npm install github:thuongvovan/ZeroTTS
+```
+
+```ts
+import { TtsWorker, normalizeViText, textSegments } from 'zerotts-web';
+
+const tts = new TtsWorker();
+const loaded = await tts.load({
+  engine: 'ggml-cpu',
+  gguf: 'gguf/zerotts-q4_0.gguf',
+});
+const voiceName = loaded.voices.voices[0]?.name;
+if (!voiceName) throw new Error('Không có giọng đọc');
+
+const run = tts.generate({
+  segments: textSegments(normalizeViText('Xin chào'), 15),
+  voiceName,
+  options: { cfgScale: 1 },
+  seed: 1234,
+});
+
+for await (const pcm of run.chunks) {
+  // PCM mono Float32Array, sample rate nằm trong loaded.sampleRate.
+}
+```
+
+Package chỉ chạy trong trình duyệt. Worker, runtime GGML và WASM được bundler
+sao chép tự động; Vite và webpack 5 hỗ trợ mẫu URL mà package sử dụng. Để chạy
+đa luồng, server của ứng dụng cần gửi hai header:
+
+```text
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+Thiếu hai header này không làm thư viện lỗi: nó tự dùng runtime đơn luồng đi kèm.
+Model không nằm trong package npm mà được tải từ Hugging Face hoặc `repo` URL do
+ứng dụng truyền vào, sau đó lưu trong Cache API của trình duyệt.
+
 ZeroTTS chạy hoàn toàn trong trình duyệt: GGML/GGUF tạo mã âm thanh, codec ONNX
 giải mã từng khối PCM và Web Audio phát ngay khi khối đầu tiên sẵn sàng. Không có
 server suy luận và không tải văn bản hay giọng của người dùng lên mạng.
 
-Đây là demo nằm trong repository, chưa phải package npm độc lập.
+Thư mục này chứa demo và mã nguồn của package `zerotts-web`.
 
 ## Cài mới từ đầu
 

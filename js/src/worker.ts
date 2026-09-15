@@ -120,6 +120,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       case 'load': {
         const loaded = await loadModel({
           ...message.options,
+          runtimeAssets: message.runtimeAssets,
           onProgress: (progress) => post({ type: 'progress', id, progress }),
         });
         tts = loaded.tts;

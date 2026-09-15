@@ -215,7 +215,7 @@ cmake --build build -j
 
 # browser threaded CPU + HTTP-safe single-thread CPU
 source ~/emsdk/emsdk_env.sh
-./build-wasm.sh          # writes ../js/public/ggml{,-single}/
+./build-wasm.sh          # writes package assets to ../js/runtime/ggml{,-single}/
 ```
 
 The threaded CPU artifact is the browser default on an isolated origin. Plain

@@ -12,7 +12,7 @@
  *     makes this port testable against Python for bit-exact agreement
  */
 
-import * as ort from 'onnxruntime-web';
+import * as ort from 'onnxruntime-web/wasm';
 
 import { MossCodecDecoder, MossStreamingDecoder } from './codec';
 import { Rng } from './rng';

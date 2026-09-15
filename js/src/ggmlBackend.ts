@@ -28,6 +28,7 @@
  */
 
 import { Rng } from './rng';
+import type { RuntimeAssets } from './runtimeAssets';
 import { DEFAULT_SAMPLING, SamplingOptions } from './types';
 import { BpeTokenizer } from './tokenizer';
 
@@ -61,10 +62,13 @@ interface ZeroTTSWasm {
 /** Select the threaded CPU artifact only when SharedArrayBuffer may be sent to
  * its pthread workers. Plain HTTP over a LAN IP is not cross-origin isolated,
  * so it must use the separate single-thread build. */
-function wasmRuntime(): { url: string; threaded: boolean } {
+function wasmRuntime(
+  assets: RuntimeAssets,
+): { moduleUrl: string; wasmUrl: string; threaded: boolean } {
   const threaded = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
   return {
-    url: threaded ? '/ggml/zerotts-wasm.js' : '/ggml-single/zerotts-wasm.js',
+    moduleUrl: threaded ? assets.ggmlThreadedModule : assets.ggmlSingleModule,
+    wasmUrl: threaded ? assets.ggmlThreadedWasm : assets.ggmlSingleWasm,
     threaded,
   };
 }
@@ -119,18 +123,22 @@ export class ZeroTTSGgml {
    *   requirement onnxruntime-web's multi-threaded WASM already imposes.
    */
   static async create(
-    gguf: ArrayBuffer, tokenizer: BpeTokenizer, threads?: number,
+    gguf: ArrayBuffer, tokenizer: BpeTokenizer, assets: RuntimeAssets, threads?: number,
   ): Promise<ZeroTTSGgml> {
-    // Imported through a constructed function so the bundler never sees this as
-    // an import site. Emscripten's output is a pre-built ES module that resolves
-    // its .wasm and spawns its pthread workers from its own URL; Vite's import
-    // analysis rewrites that URL and then fails to transform the file, so the
-    // module has to be fetched exactly as served from public/.
+    // Imported through a constructed function so the Emscripten module remains
+    // a separately emitted package asset. Its WASM URL is passed explicitly
+    // because bundlers are free to hash the two files differently.
     const dynamicImport = new Function('u', 'return import(u)') as
-      (u: string) => Promise<{ default: () => Promise<ZeroTTSWasm> }>;
-    const runtime = wasmRuntime();
-    const factory = (await dynamicImport(runtime.url)).default;
-    const M: ZeroTTSWasm = await factory();
+      (u: string) => Promise<{
+        default: (options?: {
+          locateFile?: (path: string, prefix: string) => string;
+        }) => Promise<ZeroTTSWasm>;
+      }>;
+    const runtime = wasmRuntime(assets);
+    const factory = (await dynamicImport(runtime.moduleUrl)).default;
+    const M: ZeroTTSWasm = await factory({
+      locateFile: (path) => path.endsWith('.wasm') ? runtime.wasmUrl : path,
+    });
 
     const n = runtime.threaded
       ? (threads ?? Math.min(navigator.hardwareConcurrency || 4, 8))

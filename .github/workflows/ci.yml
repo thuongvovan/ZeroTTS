@@ -46,3 +46,18 @@ jobs:
       # rules; only this keeps them in step.
       - run: npm run parity
         working-directory: js
+
+  package-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm pack --ignore-scripts

@@ -15,7 +15,7 @@
  * Credit: OpenMOSS team, Apache-2.0. See NOTICE.
  */
 
-import * as ort from 'onnxruntime-web';
+import * as ort from 'onnxruntime-web/wasm';
 
 interface TransformerOffsetSpec {
   input_name: string;

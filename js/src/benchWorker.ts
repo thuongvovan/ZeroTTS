@@ -1,11 +1,12 @@
 /** One isolated benchmark process. The page creates a fresh worker per backend
  * so a retired WASM heap cannot distort the next measurement. */
-import * as ort from 'onnxruntime-web';
+import * as ort from 'onnxruntime-web/wasm';
 
 import { BenchConfig, BenchResult, BenchWorkerRequest, BenchWorkerResponse, backendLabel } from './benchTypes';
 import { fetchWithCache } from './cache';
 import type { MossCodecDecoder } from './codec';
 import { ZeroTTSGgml } from './ggmlBackend';
+import { DEFAULT_RUNTIME_ASSETS } from './runtimeAssets';
 import { ZeroTTSBrowser } from './synthesizer';
 import { BpeTokenizer } from './tokenizer';
 import { ZeroTTSConfig } from './types';
@@ -43,7 +44,7 @@ async function loadSource(config: BenchConfig): Promise<Generator> {
 
   if (config.backend !== 'onnx-wasm') {
     const gguf = await getBin(config.ggufBase, config.gguf);
-    return ZeroTTSGgml.create(gguf, tokenizer, config.threads);
+    return ZeroTTSGgml.create(gguf, tokenizer, DEFAULT_RUNTIME_ASSETS, config.threads);
   }
 
   ort.env.wasm.numThreads = self.crossOriginIsolated ? config.threads : 1;

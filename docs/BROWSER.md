@@ -192,11 +192,13 @@ source ~/emsdk/emsdk_env.sh
 cd cpp && ./build-wasm.sh
 ```
 
-The script writes the threaded CPU pair to `js/public/ggml/` and the
-single-thread CPU pair to `js/public/ggml-single/`. Vite copies both directories
-unchanged. The loader selects `ggml-single` when `crossOriginIsolated` is false,
-which makes plain `http://IP:PORT` usable instead of attempting to transfer a
-`SharedArrayBuffer` to a pthread Worker. That fallback is functional but slower.
+The script writes the threaded CPU pair to `js/runtime/ggml/` and the
+single-thread CPU pair to `js/runtime/ggml-single/`. These checked-in package
+assets are discovered through `import.meta.url`, so an application bundler can
+copy and fingerprint them together with the ZeroTTS Worker. The loader selects
+the single-thread runtime when `crossOriginIsolated` is false, which makes plain
+`http://IP:PORT` usable instead of attempting to transfer a `SharedArrayBuffer`
+to a pthread Worker. That fallback is functional but slower.
 
 ## Repeating the benchmark on other machines
 

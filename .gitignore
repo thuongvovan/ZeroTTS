@@ -11,7 +11,7 @@ venv/
 !**/preview.wav
 outputs/
 models/
-js/node_modules/
+node_modules/
 js/dist/
 
 # cpp/: cmake output, converted weights, and the WASM artifacts staged for Vite.

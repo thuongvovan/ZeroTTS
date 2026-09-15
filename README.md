@@ -148,6 +148,46 @@ CPU/WebAssembly. The web API uses stable engine ids (`ggml-cpu`, `onnx-wasm`),
 while generation and streaming calls remain unchanged when switching. See
 [the web installation guide](js/README.md) and [docs/BROWSER.md](docs/BROWSER.md).
 
+### Install the browser library from Git
+
+The repository root is an installable ESM package. npm builds the package after
+cloning it, including the module Worker, GGML runtimes and WASM assets:
+
+```bash
+npm install github:thuongvovan/ZeroTTS
+```
+
+Then import the browser-only API by its package name:
+
+```ts
+import { TtsWorker, normalizeViText, textSegments } from 'zerotts-web';
+
+const tts = new TtsWorker();
+const loaded = await tts.load({
+  engine: 'ggml-cpu',
+  gguf: 'gguf/zerotts-q4_0.gguf',
+});
+const voiceName = loaded.voices.voices[0]?.name;
+if (!voiceName) throw new Error('No voice is available');
+
+const run = tts.generate({
+  segments: textSegments(normalizeViText('Xin chào'), 15),
+  voiceName,
+  options: { cfgScale: 1 },
+  seed: 1234,
+});
+
+for await (const pcm of run.chunks) {
+  // pcm is mono Float32Array audio at loaded.sampleRate.
+}
+```
+
+Vite, webpack 5 and other bundlers that support module Workers plus
+`new URL(..., import.meta.url)` can copy the package assets automatically. Serve
+the application with `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` for multi-threaded WASM. Without
+cross-origin isolation the library selects its included single-thread runtime.
+
 The default f32 GGUF plus codec downloads about 820 MB once and is persisted in
 the browser cache. q8_0 (206 MB) and q4_0 (124 MB) GGUFs are available when
 download size matters more than exact parity with the f32 model.
