@@ -1,0 +1,49 @@
+services:
+  zerotts-api:
+    build:
+      context: .
+      args:
+        CUDA_IMAGE: ${CUDA_IMAGE:-nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04}
+    image: zerotts-api:cuda
+    restart: unless-stopped
+    ports:
+      - "${ZEROTTS_PORT:-8000}:8000"
+    environment:
+      ZEROTTS_MODEL: ${ZEROTTS_MODEL:-zeroweight-ai/ZeroTTS}
+      ZEROTTS_PROVIDER: cuda
+      ZEROTTS_DEVICE_ID: ${ZEROTTS_DEVICE_ID:-0}
+      ZEROTTS_MAX_CONCURRENCY: ${ZEROTTS_MAX_CONCURRENCY:-1}
+      ZEROTTS_INTRA_OP_THREADS: ${ZEROTTS_INTRA_OP_THREADS:-4}
+      ZEROTTS_API_KEY: ${ZEROTTS_API_KEY:-}
+      ZEROTTS_NORMALIZE_VI: ${ZEROTTS_NORMALIZE_VI:-true}
+      TTS_VOICE_ALIASES: ${TTS_VOICE_ALIASES:-}
+      KOKORO_ENABLED: ${KOKORO_ENABLED:-true}
+      KOKORO_MODEL_PATH: /data/kokoro/kokoro-v1.0.onnx
+      KOKORO_VOICES_PATH: /data/kokoro/voices-v1.0.bin
+      KOKORO_DOWNLOAD: ${KOKORO_DOWNLOAD:-true}
+      KOKORO_ESPEAK_FALLBACK: ${KOKORO_ESPEAK_FALLBACK:-true}
+      HF_HOME: /data/huggingface
+    volumes:
+      - zerotts-model-cache:/data/huggingface
+      - kokoro-model-cache:/data/kokoro
+      # To use local weights, uncomment this mount and set
+      # ZEROTTS_MODEL=/models/ZeroTTS in .env.
+      # - ./models:/models:ro
+    shm_size: "2gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10m
+      retries: 3
+
+volumes:
+  zerotts-model-cache:
+  kokoro-model-cache:

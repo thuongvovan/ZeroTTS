@@ -47,9 +47,10 @@ the next open model**, and it runs faster than real time on a laptop CPU.
 4. [Voices — and voice cloning](#voices--and-voice-cloning)
 5. [Benchmarks](#benchmarks)
 6. [Web UI](#web-ui)
-7. [Browser demo](#browser-demo)
-8. [How it works](#how-it-works)
-9. [Credits](#credits)
+7. [OpenAI-compatible API](#openai-compatible-api)
+8. [Browser demo](#browser-demo)
+9. [How it works](#how-it-works)
+10. [Credits](#credits)
 
 ---
 
@@ -138,6 +139,60 @@ python webui/app.py --model ./local_dir   # a local model directory
 
 Voice picker, streaming playback, long-form segmentation, and the generation
 settings above.
+
+## OpenAI-compatible API: ZeroTTS + Kokoro ONNX
+
+The included FastAPI service implements `POST /v1/audio/speech` with two ONNX
+engines behind one OpenAI-compatible endpoint:
+
+- Voices beginning with `vf_` or `vm_` are synthesized by ZeroTTS; `f` means
+  female and `m` means male, matching Kokoro's naming convention.
+- English, Japanese and Chinese use Kokoro ONNX with native Misaki G2P.
+- Spanish, French, Hindi, Italian and Brazilian Portuguese use Kokoro ONNX;
+  eSpeak is only the configured fallback because Misaki has no native frontend
+  for those Kokoro languages yet.
+
+`voice` is the only routing key. For example, `vf_maichi` selects Vietnamese
+ZeroTTS, `af_heart` selects Kokoro American English, and `jf_alpha` selects
+Kokoro Japanese. The OpenAI `model` field is accepted but ignored; no
+`language` extension is needed.
+
+It supports actual chunked responses in `mp3`, `opus`, `aac`, `flac`, `wav`,
+and raw signed little-endian 24 kHz `pcm`, plus optional SSE audio events.
+
+Run it on an NVIDIA GPU with Docker Compose:
+
+```bash
+cp .env.example .env
+# Set ZEROTTS_API_KEY in .env, then:
+docker compose up --build
+```
+
+The first start downloads ZeroTTS and Kokoro assets into separate persistent
+Docker volumes. Both engines share the same CUDA-enabled ONNX Runtime process.
+The server becomes healthy after both models are loaded.
+
+```bash
+curl http://localhost:8000/v1/audio/speech \
+  -H "Authorization: Bearer change-me" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tts-1",
+    "input": "Xin chào, đây là ZeroTTS chạy trên CUDA.",
+    "voice": "vf_maichi",
+    "response_format": "mp3",
+    "speed": 1.0
+  }' \
+  --output speech.mp3
+```
+
+For Kokoro, use a native voice such as `af_heart`; its prefix supplies the
+language. OpenAI names such as `alloy` are not guessed. If a client requires
+one, map it explicitly with `TTS_VOICE_ALIASES={"alloy":"vf_maichi"}`.
+
+See [the API deployment guide](docs/API.md) for the voice-prefix matrix,
+OpenAI SDK examples, Misaki/eSpeak policy, configuration, and CPU development
+mode.
 
 ## Browser demo
 

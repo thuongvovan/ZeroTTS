@@ -35,7 +35,18 @@ dependencies = [
 # before the server starts. Both are imported directly, so both are named here
 # rather than relied on as transitive Gradio dependencies.
 webui = ["gradio>=4.44.0", "fastapi>=0.110", "uvicorn>=0.27", "requests>=2.31"]
-# Metrics only — the scorers are torch models. Inference stays torch-free.
+# OpenAI-compatible HTTP API. ffmpeg is required at the OS level for encoded
+# streaming formats; raw 24 kHz PCM is produced directly.
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
+# Kokoro ONNX plus its recommended Misaki G2P frontends. The service always
+# feeds phonemes from Misaki into Kokoro; Kokoro's eSpeak tokenizer is not used
+# as the primary frontend.
+kokoro = [
+    "kokoro-onnx>=0.6.1,<0.7; python_version >= '3.10'",
+    "misaki[en,ja,zh]>=0.9.4,<0.10; python_version >= '3.10' and python_version < '3.14'",
+]
+# Benchmark metrics use torch models. The core ZeroTTS/Kokoro inference path is
+# ONNX; Misaki's English package currently imports torch even with trf=False.
 # Benchmarking. The metrics themselves live in the ZeroBench-TTS dataset repo
 # (fetched at runtime by evaluation/zerobench.py); these are the libraries its
 # scorer needs. UTMOSv2 is optional — pass --skip_utmos without it.
@@ -49,7 +60,7 @@ eval = [
     "pandas>=2.0",
     "jiwer>=3.0",
 ]
-dev = ["pytest>=7.4", "ruff>=0.5"]
+dev = ["pytest>=7.4", "ruff>=0.5", "httpx>=0.27"]
 
 [project.urls]
 Homepage = "https://github.com/zeroweight-ai/ZeroTTS"
@@ -58,6 +69,7 @@ Benchmark = "https://huggingface.co/datasets/zeroweight-ai/ZeroBench-TTS"
 
 [project.scripts]
 zerotts = "zerotts.cli:main"
+zerotts-api = "zerotts_api.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
