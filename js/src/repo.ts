@@ -40,8 +40,9 @@ export const ONNX_REPO = ENGINES['onnx-wasm'].defaultRepo;
  *    arithmetic than it saves in bandwidth; quantization here is a
  *    download-size lever, not a speed one.
  *  - **It is bit-exact.** f32 reproduces the ONNX runtime's frame codes
- *    exactly. q8_0 draws a different code 4.9% of the time and q4_0 36.5% —
- *    not broken, but a different take of the same sentence.
+ *    exactly. Quantized builds trade exact reproduction for download size;
+ *    use listening tests rather than treating one drift percentage as a
+ *    universal quality score.
  *
  * At 772 MB it is still a smaller download than the ~858 MB of ONNX graphs it
  * replaces. Pick q8_0 (206 MB) or q4_0 (124 MB) when download size is the
@@ -53,8 +54,8 @@ export const DEFAULT_GGUF = 'gguf/zerotts-f32.gguf';
  *  share of sampled codes that come out differently from the unquantized model
  *  when both are driven along the same code sequence. */
 export const GGUF_BUILDS = [
-  { file: 'gguf/zerotts-q4_0.gguf', label: 'q4_0 — 124 MB, nhẹ nhất, sai khác 36%' },
-  { file: 'gguf/zerotts-q8_0.gguf', label: 'q8_0 — 206 MB, nhẹ, sai khác 4,9%' },
+  { file: 'gguf/zerotts-q4_0.gguf', label: 'q4_0 — 124 MB, nhẹ nhất, sai khác nhiều hơn' },
+  { file: 'gguf/zerotts-q8_0.gguf', label: 'q8_0 — 206 MB, cân bằng' },
   { file: 'gguf/zerotts-f32.gguf', label: 'f32 — 772 MB, nhanh nhất, chính xác tuyệt đối (mặc định)' },
 ] as const;
 

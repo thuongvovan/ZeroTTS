@@ -136,13 +136,17 @@ cho CFG và codec:
 | | download | realtime | notes |
 |---|---:|---:|---|
 | **ggml/GGUF fp32** (default) | 772 MB | 6.1x | bit-exact against ONNX; no CFG |
-| ggml/GGUF q8_0 | 206 MB | 3.6x | 4.9% of codes drawn differently |
-| ggml/GGUF q4_0 | 124 MB | 4.1x | 36.5% differently |
+| ggml/GGUF q8_0 | 206 MB | 3.6x | 30.39% teacher-forced drift in the corrected single-case test |
+| ggml/GGUF q4_0 | 124 MB | 4.1x | 70.29% in the same test |
 | onnxruntime-web | ~858 MB | 4.2x | the only one with CFG |
 
 Realtime figures at 4 threads on one machine; the ggml backend takes
 `min(hardwareConcurrency, 8)` and gains from the extra threads, onnxruntime
 caps at 4 and does not.
+
+The speed figures are the original browser measurements. The drift figures were
+re-run on 2026-09-15 after fixing the native quality tool's random-draw buffer;
+they are regression signals for one sentence and seed, not listening scores.
 
 ## API engine ổn định
 

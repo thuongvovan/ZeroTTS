@@ -72,7 +72,8 @@ int main(int argc, char ** argv) {
     }
 
     Rng rng(seed);
-    std::vector<int32_t> ref_codes(K), cnd_codes(K), au(K);
+    std::vector<int32_t> ref_codes(K), cnd_codes(K);
+    std::vector<float> au(K);
     long total = 0, differ = 0, eoa_differ = 0, frames = 0;
     int tail = -1;
 
@@ -82,9 +83,9 @@ int main(int argc, char ** argv) {
         for (int i = 0; i < K; i++) au[i] = rng.next();
 
         int ref_eoa = 0, cnd_eoa = 0;
-        if (zerotts_frame(ref, forbid, &sp, cu, (float *) au.data(), ref_codes.data(), &ref_eoa) != 0) return 1;
+        if (zerotts_frame(ref, forbid, &sp, cu, au.data(), ref_codes.data(), &ref_eoa) != 0) return 1;
         // The candidate is driven along the reference's codes, not its own.
-        if (zerotts_frame_forced(cnd, forbid, &sp, cu, (float *) au.data(), ref_codes.data(),
+        if (zerotts_frame_forced(cnd, forbid, &sp, cu, au.data(), ref_codes.data(),
                                  cnd_codes.data(), &cnd_eoa) != 0) return 1;
 
         if (ref_eoa != cnd_eoa) eoa_differ++;

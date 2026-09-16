@@ -61,16 +61,22 @@ Weights on the wire, and how far each drifts from fp32:
 |---|---:|---:|
 | ONNX graphs | ~858 MB | 0 (bit-exact — same weights) |
 | GGUF f32 | 772 MB | 0 (bit-exact) |
-| GGUF f16 | 405 MB | 0.4% |
-| GGUF q8_0 | 206 MB | 4.9% |
-| GGUF q5_0 | 145 MB | 18.9% |
-| GGUF q4_0 | 124 MB | 36.5% |
+| GGUF f16 | 405 MB | not re-run after test correction |
+| GGUF q8_0 | 206 MB | 30.39% |
+| GGUF q5_0 | 145 MB | not re-run after test correction |
+| GGUF q4_0 | 124 MB | 70.29% |
 
 The drift column is measured teacher-forced (`zerotts-quality`, below), not by
 comparing two independent takes: two models sampling on their own diverge at the
 first differing token and every later frame is then a different utterance, which
 measures nothing. The control channel — the `<eoa>` stop decision — was
 identical in every build.
+
+The q8_0 and q4_0 figures above are the corrected 2026-09-15 single-sentence
+run (1,168 sampled codes, seed 1234). Earlier values in this document were
+invalid because the uniform random draws in `zerotts-quality` were stored in an
+integer vector and then reinterpreted as floats. Quality selection still needs
+a larger text corpus and decoded-audio listening tests.
 
 > **Measuring this yourself:** hold only one backend in the page at a time. Each
 > is 0.2-0.9 GB of buffers plus a WASM heap, and keeping two alive pushes the
